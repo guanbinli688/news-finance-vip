@@ -3,7 +3,10 @@ from datetime import date
 from pathlib import Path
 
 from news_finance_v2.config import Settings
-from news_finance_v2.live import HttpCollector, OpenAIAnalyzer, SMTPMailer, parse_ics_events
+from news_finance_v2.live import (
+    HttpCollector, OpenAIAnalyzer, SMTPMailer, parse_ics_events, rank_news_symbols,
+)
+from news_finance_v2.sources import COMPANY_UNIVERSE
 
 
 class Response:
@@ -42,7 +45,10 @@ def test_full_collection_adds_company_ir_sources(tmp_path):
     collector = HttpCollector(
         settings, session=session,
         market_loader=lambda symbols: {s: 1 for s in symbols},
-        stock_loader=lambda symbols: {s: {"price": 1, "volatility_20_pct": 1} for s in symbols},
+        stock_loader=lambda symbols: {
+            s: {"price": 1, "day_change_pct": -1, "volatility_20_pct": 1}
+            for s in symbols
+        },
     )
     regular = collector.collect(full=False)
     session.responses = iter([Response() for _ in range(100)])
@@ -50,7 +56,19 @@ def test_full_collection_adds_company_ir_sources(tmp_path):
     assert len(full["sources"]) > len(regular["sources"])
     assert any(item["kind"] == "company" for item in full["sources"])
     assert any(item["kind"] == "company_news" for item in full["sources"])
-    assert len(full["stock_snapshot"]) == 20
+    assert len(full["stock_snapshot"]) == len(COMPANY_UNIVERSE)
+    assert len(full["screened_symbols"]) == 50
+    assert full["universe_size"] >= 100
+
+
+def test_news_prefilter_uses_each_stocks_own_volatility():
+    snapshot = {
+        "A": {"day_change_pct": -1, "volatility_20_pct": 1},
+        "B": {"day_change_pct": -2, "volatility_20_pct": 4},
+        "C": {"day_change_pct": 1, "volatility_20_pct": 1},
+    }
+
+    assert rank_news_symbols(snapshot, limit=2) == ("A", "B")
 
 
 def test_ics_events_are_limited_to_forward_window():
@@ -142,17 +160,17 @@ def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypa
 def test_company_signal_guard_caps_focus_and_rejects_unknown_tickers():
     signals = [
         {"ticker": ticker, "stance": "关注", "brief": "中文结论"}
-        for ticker in ("NVDA", "MSFT", "JPM", "XOM", "FAKE")
+        for ticker in ("NVDA", "MSFT", "JPM", "XOM", "AAPL", "FAKE")
     ]
     snapshot = {
         ticker: {"price": 100, "day_change_pct": -2, "volatility_20_pct": 2}
-        for ticker in ("NVDA", "MSFT", "JPM", "XOM")
+        for ticker in ("NVDA", "MSFT", "JPM", "XOM", "AAPL")
     }
 
     selected = OpenAIAnalyzer._limit_company_signals(signals, snapshot)
 
-    assert len(selected) == 4
-    assert sum(item["stance"] == "关注" for item in selected) == 3
+    assert len(selected) == 5
+    assert sum(item["stance"] == "关注" for item in selected) == 4
     assert selected[-1]["stance"] == "等待"
 
 

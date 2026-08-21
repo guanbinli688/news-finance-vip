@@ -145,7 +145,7 @@ def _source_cards(context, kind):
     curated = context.get("company_signals" if kind == "company" else "media_themes", [])
     curated_cards = []
     focus_count = 0
-    limit = 6 if kind == "company" else 3
+    limit = 8 if kind == "company" else 3
     for item in curated[:limit]:
         if kind == "company":
             brief = str(item.get("brief") or "").strip()
@@ -159,7 +159,7 @@ def _source_cards(context, kind):
             label = str(item.get("stance") or item.get("signal") or "等待").strip()
             if label not in {"关注", "等待", "回避"}:
                 label = "等待"
-            if label == "关注" and focus_count >= 3:
+            if label == "关注" and focus_count >= 4:
                 label = "等待"
             if label == "关注":
                 focus_count += 1

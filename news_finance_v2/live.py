@@ -110,6 +110,19 @@ def _rss_text(source: str) -> str:
     return "\n".join(titles)[:8000]
 
 
+def rank_news_symbols(stock_snapshot, limit=50):
+    ranked = []
+    for symbol, snapshot in stock_snapshot.items():
+        try:
+            change = float(snapshot["day_change_pct"])
+            volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
+        except (KeyError, TypeError, ValueError):
+            continue
+        ranked.append((change / volatility, change, symbol))
+    ranked.sort()
+    return tuple(symbol for _, _, symbol in ranked[:limit])
+
+
 class HttpCollector:
     def __init__(self, settings: Settings, *, session=None, market_loader=None, stock_loader=None):
         self.settings = settings
@@ -135,23 +148,24 @@ class HttpCollector:
         else:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 records = list(executor.map(lambda spec: self._fetch(*spec), specs))
+        market = self.market_loader(list(SIGNALS))
+        stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
+        news_symbols = rank_news_symbols(stock_snapshot) if full else ()
         if full:
             news_specs = [
                 (f"{symbol} 新闻", f"https://finance.yahoo.com/rss/2.0/headline?s={symbol}", symbol)
-                for symbol in COMPANY_UNIVERSE
+                for symbol in news_symbols
             ]
             if self._external_session:
                 records += [self._fetch_company_news(*spec) for spec in news_specs]
             else:
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     records += list(executor.map(lambda spec: self._fetch_company_news(*spec), news_specs))
-        market = self.market_loader(list(SIGNALS))
-        stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
         if any(r["status"] == "SUCCESS" and r["kind"] == "official" for r in records):
             evidence_kinds.add("official")
         if any(r["status"] == "SUCCESS" and r["kind"] == "media" for r in records):
             evidence_kinds.add("media")
-        if any(r["status"] == "SUCCESS" and r["kind"] == "company" for r in records):
+        if any(r["status"] == "SUCCESS" and r["kind"] in {"company", "company_news"} for r in records):
             evidence_kinds.add("company")
         core_failures = [r["name"] for r in records if r["core"] and r["status"] != "SUCCESS"]
         events = next((r.get("events", []) for r in records if r["name"] == "BLS" and r["status"] == "SUCCESS"), [])
@@ -160,6 +174,8 @@ class HttpCollector:
             "evidence_kinds": evidence_kinds, "market": market,
             "market_coverage": len(market) / len(SIGNALS), "events": events,
             "stock_snapshot": stock_snapshot,
+            "universe_size": len(COMPANY_UNIVERSE),
+            "screened_symbols": list(news_symbols),
         }
 
     def _fetch(self, name, url, kind, core):
@@ -276,9 +292,9 @@ class OpenAIAnalyzer:
             company_prompt += "\n个股市场状态：\n" + json.dumps(collected.get("stock_snapshot", {}), ensure_ascii=False)
             company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
-\n从上述候选中筛选最多6个真正可交易的增量信号，输出：
+\n从上述候选中筛选最多8个真正可交易的增量信号，输出：
 {"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
-硬约束：只输出JSON；除ticker和source外全部使用简体中文；当前执行模式只买受控回撤，最多3只标记“关注”，其余只能“等待/回避”；“关注”必须同时具备可验证的正向增量事实、当日下跌达到该股20日波动率的0.5倍、且没有明显利空导致逻辑失效；上涨股即使趋势强也只能“等待”；跌幅达到自身波动率但由明确利空驱动的应“回避”；触发条件优先写止跌确认，不写追涨；不能只凭网站介绍或单条媒体标题；优先质量与行业分散，不为凑数量而入选；不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
+硬约束：只输出JSON；除ticker和source外全部使用简体中文；当前为模拟盘弹性执行，最多4只标记“关注”，其余只能“等待/回避”；“关注”应同时具备可验证的正向逻辑、当日下跌达到该股20日波动率的0.25倍、且没有明显利空导致逻辑失效；若样本中有合格对象，应优先给出2-4只行业分散的“关注”，不要因轻微信息不完美全部写成等待；跌幅达到自身波动率但由明确重大利空驱动的应“回避”；触发条件优先写止跌确认，不写追涨；不能只凭网站介绍或单条媒体标题；不为凑数量而牺牲基本逻辑；不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；不能编造买卖价格。
 """
             company_system = "你是中文美股研究负责人。把公司公告压缩为可执行的股票观察结论，只输出JSON。"
             company_result = self._complete_json("company", company_system, company_prompt)
@@ -314,17 +330,17 @@ class OpenAIAnalyzer:
                 try:
                     day_change = float(snapshot["day_change_pct"])
                     volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
-                    controlled_pullback = day_change <= -0.5 * volatility
+                    controlled_pullback = day_change <= -0.25 * volatility
                 except (KeyError, TypeError, ValueError):
                     controlled_pullback = False
-                if focus_count >= 3 or not controlled_pullback:
+                if focus_count >= 4 or not controlled_pullback:
                     stance = "等待"
             if stance == "关注":
                 focus_count += 1
             item["ticker"] = ticker
             item["stance"] = stance
             selected.append(item)
-            if len(selected) == 6:
+            if len(selected) == 8:
                 break
         return selected
 

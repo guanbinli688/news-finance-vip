@@ -57,4 +57,26 @@ COMPANY_SYMBOLS = {
     "Goldman Sachs IR": "GS", "Visa IR": "V",
 }
 
-COMPANY_UNIVERSE = tuple(COMPANY_SYMBOLS.values())
+EXPANDED_COMPANY_UNIVERSE = (
+    # 科技、半导体、软件
+    "AMD", "INTC", "ORCL", "CRM", "ADBE", "QCOM", "TXN", "AMAT",
+    "LRCX", "KLAC", "MRVL", "PLTR", "NOW", "IBM", "CSCO", "PANW",
+    "CRWD", "SNOW", "ARM", "ASML", "META",
+    # 消费、互联网、媒体
+    "HD", "LOW", "TGT", "NKE", "SBUX", "MCD", "BKNG", "DIS",
+    "NFLX", "ABNB", "ROST", "TJX", "PDD", "JD", "BIDU", "SONY",
+    # 金融
+    "BAC", "C", "WFC", "MS", "BLK", "SCHW", "AXP", "COF", "PYPL",
+    # 医疗
+    "JNJ", "PFE", "MRK", "ABBV", "AMGN", "GILD", "TMO", "DHR",
+    "ISRG", "CVS", "NVO",
+    # 工业、国防、运输
+    "BA", "GE", "RTX", "LMT", "DE", "UPS", "FDX", "HON", "UNP",
+    # 能源、材料、黄金
+    "CVX", "COP", "SLB", "OXY", "EOG", "FCX", "NEM",
+    # 通信、防御消费、公用事业、REIT
+    "TMUS", "VZ", "T", "CMCSA", "PG", "KO", "PEP", "PM", "MO",
+    "CL", "MDLZ", "NEE", "DUK", "SO", "AMT",
+)
+
+COMPANY_UNIVERSE = tuple(dict.fromkeys((*COMPANY_SYMBOLS.values(), *EXPANDED_COMPANY_UNIVERSE)))
