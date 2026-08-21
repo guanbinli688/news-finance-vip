@@ -169,15 +169,19 @@ class SMTPMailer:
     def __init__(self, settings: Settings): self.settings = settings
     def send(self, report: str):
         if self.settings.public_report_url:
+            dated_url = (
+                f"{self.settings.public_report_url.rstrip('/')}"
+                f"/{self.settings.report_date.strftime('%m%d')}"
+            )
             link = (
                 "<div style='padding:12px;background:#eaf4fb;border-left:5px solid #005ea8'>"
-                f"公网最新版：<a href='{self.settings.public_report_url}'>{self.settings.public_report_url}</a></div>"
+                f"公网最新版：<a href='{dated_url}'>{dated_url}</a></div>"
             )
             report = report.replace("<body>", "<body>" + link, 1)
         message = MIMEText(report, "html", "utf-8")
-        message["Subject"] = f"NEWS FINANCE V2｜{self.settings.report_date.isoformat()}"
-        message["From"] = self.settings.smtp_username
-        message["To"] = self.settings.email_to
+        message["Subject"] = f"NEWS FINANCE｜{self.settings.report_date.isoformat()}"
+        message["From"] = self.settings.email_to
+        message["To"] = self.settings.smtp_username
         with smtplib.SMTP_SSL(self.settings.smtp_host, self.settings.smtp_port, context=ssl.create_default_context()) as smtp:
             smtp.login(self.settings.smtp_username, self.settings.smtp_password)
             smtp.send_message(message)

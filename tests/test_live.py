@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 
 from news_finance_v2.config import Settings
-from news_finance_v2.live import HttpCollector, OpenAIAnalyzer, parse_ics_events
+from news_finance_v2.live import HttpCollector, OpenAIAnalyzer, SMTPMailer, parse_ics_events
 
 
 class Response:
@@ -103,3 +103,31 @@ def test_openai_analyzer_parses_structured_prediction(tmp_path, monkeypatch):
     analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
     assert result["predictions"][0]["target"] == "SPY"
     assert client.responses.calls == 1
+
+
+def test_mailer_uses_dated_url_and_swaps_sender_recipient(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORT_DATE_OVERRIDE", "2026-08-21")
+    monkeypatch.setenv("PUBLIC_REPORT_URL", "https://example.test/reports/")
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
+    monkeypatch.setenv("SMTP_USERNAME", "original-sender@example.test")
+    monkeypatch.setenv("SMTP_PASSWORD", "secret")
+    monkeypatch.setenv("EMAIL_TO", "original-recipient@example.test")
+    sent = []
+
+    class SMTP:
+        def __enter__(self): return self
+        def __exit__(self, *args): return None
+        def login(self, username, password):
+            assert username == "original-sender@example.test"
+            assert password == "secret"
+        def send_message(self, message): sent.append(message)
+
+    monkeypatch.setattr("news_finance_v2.live.smtplib.SMTP_SSL", lambda *args, **kwargs: SMTP())
+    SMTPMailer(Settings.from_env(tmp_path)).send("<html><body>report</body></html>")
+
+    message = sent[0]
+    body = message.get_payload(decode=True).decode("utf-8")
+    assert message["Subject"] == "NEWS FINANCE｜2026-08-21"
+    assert message["From"] == "original-recipient@example.test"
+    assert message["To"] == "original-sender@example.test"
+    assert "https://example.test/reports/0821" in body
