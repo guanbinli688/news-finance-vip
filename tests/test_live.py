@@ -1,0 +1,105 @@
+import json
+from datetime import date
+from pathlib import Path
+
+from news_finance_v2.config import Settings
+from news_finance_v2.live import HttpCollector, OpenAIAnalyzer, parse_ics_events
+
+
+class Response:
+    def __init__(self, status_code=200, text="<main>Economic calendar and policy outlook with enough useful content for research.</main>"):
+        self.status_code = status_code
+        self.text = text
+        self.url = "https://example.test/final"
+        self.headers = {"Content-Type": "text/html"}
+
+
+class Session:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.headers = {}
+    def get(self, *args, **kwargs): return next(self.responses)
+
+
+def test_http_collector_records_core_failure_and_market_coverage(tmp_path):
+    settings = Settings.from_env(tmp_path)
+    session = Session([Response(503)] + [Response() for _ in range(10)])
+    collector = HttpCollector(
+        settings, session=session,
+        market_loader=lambda symbols: {symbol: 100.0 for symbol in symbols[:-1]},
+    )
+
+    result = collector.collect(full=False)
+
+    assert "BLS" in result["core_failures"]
+    assert result["market_coverage"] == 7 / 8
+    assert result["sources"][0]["status"] == "HTTP_503"
+
+
+def test_full_collection_adds_company_ir_sources(tmp_path):
+    settings = Settings.from_env(tmp_path)
+    session = Session([Response() for _ in range(24)])
+    collector = HttpCollector(settings, session=session, market_loader=lambda symbols: {s: 1 for s in symbols})
+    regular = collector.collect(full=False)
+    session.responses = iter([Response() for _ in range(24)])
+    full = collector.collect(full=True)
+    assert len(full["sources"]) > len(regular["sources"])
+    assert any(item["kind"] == "company" for item in full["sources"])
+
+
+def test_ics_events_are_limited_to_forward_window():
+    text = "BEGIN:VEVENT\nDTSTART:20260820T123000Z\nSUMMARY:Initial Jobless Claims\nEND:VEVENT\nBEGIN:VEVENT\nDTSTART:20260930T123000Z\nSUMMARY:Too Far\nEND:VEVENT"
+    events = parse_ics_events(text, start=date(2026, 8, 19), days=14)
+    assert events == [{"date": "2026-08-20", "title": "Initial Jobless Claims", "source": "BLS"}]
+
+
+def test_collector_parses_calendar_from_untruncated_ics(tmp_path, monkeypatch):
+    monkeypatch.setenv("REPORT_DATE_OVERRIDE", "2026-08-19")
+    settings = Settings.from_env(tmp_path)
+    ics = "X" * 13000 + "\nBEGIN:VEVENT\nDTSTART:20260820T123000Z\nSUMMARY:Initial Jobless Claims\nEND:VEVENT"
+    session = Session([Response(text=ics)] + [Response() for _ in range(10)])
+    collector = HttpCollector(settings, session=session, market_loader=lambda symbols: {s: 1 for s in symbols})
+
+    result = collector.collect(full=False)
+
+    assert result["events"] == [{"date": "2026-08-20", "title": "Initial Jobless Claims", "source": "BLS"}]
+
+
+class Output:
+    output_text = json.dumps({
+        "direction": {"title": "风险偏好改善", "brief": "信用和广度确认"},
+        "predictions": [{
+            "horizon_days": 5, "target": "SPY", "direction": "UP",
+            "probability": .61, "thesis": "信用改善", "invalidation": "利差扩大",
+            "sensors": ["credit"], "evidence_ids": ["MKT-SPY", "OFF-BLS"],
+        }],
+    }, ensure_ascii=False)
+
+
+class Responses:
+    def __init__(self): self.calls = 0
+    def create(self, **kwargs):
+        self.calls += 1
+        assert kwargs["model"] == "test-model"
+        assert "市场快照" in kwargs["input"]
+        assert "horizons" in kwargs["input"]
+        assert "actions" in kwargs["input"]
+        assert "flows" in kwargs["input"]
+        assert "logic" in kwargs["input"]
+        assert "company_signals" in kwargs["input"]
+        assert "media_themes" in kwargs["input"]
+        return Output()
+
+
+class Client:
+    def __init__(self): self.responses = Responses()
+
+
+def test_openai_analyzer_parses_structured_prediction(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_MODEL", "test-model")
+    client = Client()
+    analyzer = OpenAIAnalyzer(Settings.from_env(tmp_path), client=client)
+    result = analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
+    analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
+    assert result["predictions"][0]["target"] == "SPY"
+    assert client.responses.calls == 1

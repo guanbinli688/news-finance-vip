@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp-*/
+html/*.html
+images/*
+data/news_finance_v2.db*
+data/news_finance_v2_audit.json
+dist/
+build/
+*.egg-info/
+.coverage
