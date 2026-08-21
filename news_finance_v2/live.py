@@ -277,10 +277,25 @@ class OpenAIAnalyzer:
   "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","impact":"","sources":[]}],
   "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
 }
-约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
+约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；表达应细腻、克制、专业，结论明确但不过度武断；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
 """
-        system_prompt = "你是克制、直接的中文跨资产投资研究员。只依据输入证据，先给动作再给原因，不承诺收益。严格输出JSON。"
+        system_prompt = "你是成熟、克制且措辞温和的中文跨资产投资研究员。只依据输入证据，先给动作再解释原因，不承诺收益。严格输出JSON。"
         parsed = self._complete_json("master", system_prompt, prompt)
+
+        prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
+        prediction_prompt += """
+\n请单独生成跨资产预测，只输出以下JSON：
+{"predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]}
+必须正好4项且target互不重复：至少1项股票或行业相对强弱（SPY、QQQ/SPY、IWM/SPY、XLK/SPY、XLF/SPY、XLE/SPY），至少1项利率或信用（TLT、HYG），至少1项避险或商品（GLD、USO），第4项可从上述对象或^VIX选择；不能4项都写同一方向；周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号；绝对方向使用UP/DOWN/NEUTRAL，相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
+"""
+        prediction_system = "你是跨资产预测负责人。以分散、可验证和可复盘为首要原则，严格输出JSON。"
+        prediction_result = self._complete_json(
+            "cross_asset_predictions", prediction_system, prediction_prompt
+        )
+        cross_asset_predictions = prediction_result.get("predictions", [])
+        if isinstance(cross_asset_predictions, list) and cross_asset_predictions:
+            parsed["predictions"] = self._limit_predictions(cross_asset_predictions)
 
         company_sources = [
             item for item in compact_sources
@@ -306,6 +321,28 @@ class OpenAIAnalyzer:
         else:
             parsed["company_signals"] = []
         return parsed
+
+    @staticmethod
+    def _limit_predictions(predictions):
+        allowed = {
+            "SPY", "QQQ/SPY", "IWM/SPY", "XLK/SPY", "XLF/SPY", "XLE/SPY",
+            "HYG", "TLT", "GLD", "USO", "^VIX",
+        }
+        selected = []
+        seen = set()
+        for raw in predictions:
+            if not isinstance(raw, dict):
+                continue
+            target = str(raw.get("target", "")).strip().upper()
+            if target not in allowed or target in seen:
+                continue
+            item = dict(raw)
+            item["target"] = target
+            selected.append(item)
+            seen.add(target)
+            if len(selected) == 5:
+                break
+        return selected
 
     @staticmethod
     def _limit_company_signals(signals, stock_snapshot):

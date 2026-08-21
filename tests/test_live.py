@@ -6,6 +6,7 @@ from news_finance_v2.config import Settings
 from news_finance_v2.live import (
     HttpCollector, OpenAIAnalyzer, SMTPMailer, parse_ics_events, rank_news_symbols,
 )
+from news_finance_v2.market import SIGNALS
 from news_finance_v2.sources import COMPANY_NAMES, COMPANY_UNIVERSE
 
 
@@ -35,7 +36,7 @@ def test_http_collector_records_core_failure_and_market_coverage(tmp_path):
     result = collector.collect(full=False)
 
     assert "BLS" in result["core_failures"]
-    assert result["market_coverage"] == 7 / 8
+    assert result["market_coverage"] == (len(SIGNALS) - 1) / len(SIGNALS)
     assert result["sources"][0]["status"] == "HTTP_503"
 
 
@@ -112,11 +113,12 @@ class Responses:
         self.calls += 1
         assert kwargs["model"] == "test-model"
         assert "市场快照" in kwargs["input"]
-        assert "horizons" in kwargs["input"]
-        assert "actions" in kwargs["input"]
-        assert "flows" in kwargs["input"]
-        assert "logic" in kwargs["input"]
-        assert "media_themes" in kwargs["input"]
+        if "跨资产预测" not in kwargs["input"]:
+            assert "horizons" in kwargs["input"]
+            assert "actions" in kwargs["input"]
+            assert "flows" in kwargs["input"]
+            assert "logic" in kwargs["input"]
+            assert "media_themes" in kwargs["input"]
         return Output()
 
 
@@ -131,7 +133,7 @@ def test_openai_analyzer_parses_structured_prediction(tmp_path, monkeypatch):
     result = analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
     analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
     assert result["predictions"][0]["target"] == "SPY"
-    assert client.responses.calls == 1
+    assert client.responses.calls == 2
 
 
 def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypatch):
@@ -158,7 +160,7 @@ def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypa
         "sources": [{"name": "NVIDIA IR", "kind": "company", "status": "SUCCESS", "text": "Q2 earnings and guidance"}],
     })
 
-    assert client.responses.calls == 2
+    assert client.responses.calls == 3
     assert result["company_signals"][0]["ticker"] == "NVDA"
     assert result["company_signals"][0]["stance"] == "等待"
 
