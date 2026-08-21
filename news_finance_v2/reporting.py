@@ -90,7 +90,22 @@ def translate_event_title(title) -> str:
 
 
 def _logo() -> str:
-    return """<svg class="logo" viewBox="0 0 100 100" aria-label="NEWS FINANCE"><circle cx="50" cy="50" r="46" fill="#fff" stroke="#16345c" stroke-width="4"/><circle cx="50" cy="50" r="38" fill="none" stroke="#6e8eae" stroke-width="2"/><path d="M30 30 L50 22 L70 30 L67 68 L50 80 L33 68 Z" fill="#16345c"/><path d="M38 59 L47 49 L54 55 L65 39" fill="none" stroke="#fff" stroke-width="4"/><circle cx="39" cy="38" r="2.5" fill="#fff"/><circle cx="55" cy="33" r="2.5" fill="#fff"/><text x="50" y="70" text-anchor="middle" fill="#fff" font-size="9" font-weight="700">NF</text></svg>"""
+    return """<svg class="logo" viewBox="0 0 120 120" role="img" aria-label="NEWS FINANCE 美国鹰徽标">
+<defs><filter id="eagle-shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity=".22"/></filter></defs>
+<circle cx="60" cy="60" r="56" fill="#f8fafc" stroke="#d6c598" stroke-width="3" filter="url(#eagle-shadow)"/>
+<circle cx="60" cy="60" r="49" fill="#0b2a4a" stroke="#b7a06a" stroke-width="1.5"/>
+<g fill="#fff"><circle cx="30" cy="27" r="1.7"/><circle cx="40" cy="20" r="1.7"/><circle cx="51" cy="16" r="1.7"/><circle cx="69" cy="16" r="1.7"/><circle cx="80" cy="20" r="1.7"/><circle cx="90" cy="27" r="1.7"/></g>
+<path d="M55 43C45 30 31 28 17 35c9 4 15 9 20 16-8-4-16-3-23 1 10 9 24 13 42 5z" fill="#eef2f6" stroke="#b7a06a" stroke-width="1.4"/>
+<path d="M65 43c10-13 24-15 38-8-9 4-15 9-20 16 8-4 16-3 23 1-10 9-24 13-42 5z" fill="#eef2f6" stroke="#b7a06a" stroke-width="1.4"/>
+<path d="M51 41c4-8 12-12 21-9-2 3-5 5-8 6 5 1 8 4 9 8-4 1-8 1-12-1l-5 5z" fill="#fff" stroke="#b7a06a" stroke-width="1.2"/>
+<circle cx="65" cy="37" r="1.4" fill="#071a34"/><path d="M72 39l9 3-9 4z" fill="#d2a33d"/>
+<path d="M48 45c5-4 19-4 24 0l-2 31H50z" fill="#9a5f36"/>
+<path d="M41 56h38v19c0 10-8 17-19 22-11-5-19-12-19-22z" fill="#fff" stroke="#d6c598" stroke-width="1.5"/>
+<path d="M41 56h38v10H41z" fill="#173f6b"/><g fill="#fff"><circle cx="48" cy="61" r="1.1"/><circle cx="55" cy="61" r="1.1"/><circle cx="62" cy="61" r="1.1"/><circle cx="69" cy="61" r="1.1"/><circle cx="76" cy="61" r="1.1"/></g>
+<path d="M46 66v22M54 66v27M62 66v27M70 66v22" stroke="#b21f32" stroke-width="5"/>
+<path d="M42 82c-8 0-14 4-19 11M78 82c8 0 14 4 19 11" fill="none" stroke="#d2a33d" stroke-width="2" stroke-linecap="round"/>
+<path d="M24 88l-4 1m8-5-5-2m72 6 4 1m-8-5 5-2" stroke="#d2a33d" stroke-width="2" stroke-linecap="round"/>
+</svg>"""
 
 
 def _list(items, empty="等待确认"):
