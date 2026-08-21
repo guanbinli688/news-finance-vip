@@ -180,8 +180,8 @@ class SMTPMailer:
             report = report.replace("<body>", "<body>" + link, 1)
         message = MIMEText(report, "html", "utf-8")
         message["Subject"] = f"NEWS FINANCE｜{self.settings.report_date.isoformat()}"
-        message["From"] = self.settings.email_to
-        message["To"] = self.settings.smtp_username
+        message["From"] = self.settings.smtp_username
+        message["To"] = self.settings.email_to
         with smtplib.SMTP_SSL(self.settings.smtp_host, self.settings.smtp_port, context=ssl.create_default_context()) as smtp:
             smtp.login(self.settings.smtp_username, self.settings.smtp_password)
             smtp.send_message(message)

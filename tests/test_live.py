@@ -105,7 +105,7 @@ def test_openai_analyzer_parses_structured_prediction(tmp_path, monkeypatch):
     assert client.responses.calls == 1
 
 
-def test_mailer_uses_dated_url_and_swaps_sender_recipient(tmp_path, monkeypatch):
+def test_mailer_uses_dated_url_and_authenticated_sender(tmp_path, monkeypatch):
     monkeypatch.setenv("REPORT_DATE_OVERRIDE", "2026-08-21")
     monkeypatch.setenv("PUBLIC_REPORT_URL", "https://example.test/reports/")
     monkeypatch.setenv("SMTP_HOST", "smtp.example.test")
@@ -128,6 +128,6 @@ def test_mailer_uses_dated_url_and_swaps_sender_recipient(tmp_path, monkeypatch)
     message = sent[0]
     body = message.get_payload(decode=True).decode("utf-8")
     assert message["Subject"] == "NEWS FINANCE｜2026-08-21"
-    assert message["From"] == "original-recipient@example.test"
-    assert message["To"] == "original-sender@example.test"
+    assert message["From"] == "original-sender@example.test"
+    assert message["To"] == "original-recipient@example.test"
     assert "https://example.test/reports/0821" in body
