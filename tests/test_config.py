@@ -5,6 +5,7 @@ from news_finance_v2.config import Settings
 
 def test_defaults_use_v2_paths(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("AI_MODEL", raising=False)
+    monkeypatch.delenv("CACHE_TTL_HOURS", raising=False)
     settings = Settings.from_env(tmp_path)
 
     assert settings.db_file == tmp_path / "data" / "news_finance_v2.db"
