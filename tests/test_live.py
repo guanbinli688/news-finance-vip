@@ -86,7 +86,6 @@ class Responses:
         assert "actions" in kwargs["input"]
         assert "flows" in kwargs["input"]
         assert "logic" in kwargs["input"]
-        assert "company_signals" in kwargs["input"]
         assert "media_themes" in kwargs["input"]
         return Output()
 
@@ -103,6 +102,33 @@ def test_openai_analyzer_parses_structured_prediction(tmp_path, monkeypatch):
     analyzer.analyze({"market": {"SPY": 100}, "sources": [], "events": []})
     assert result["predictions"][0]["target"] == "SPY"
     assert client.responses.calls == 1
+
+
+def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_MODEL", "test-model")
+
+    class CompanyResponses:
+        def __init__(self): self.calls = 0
+        def create(self, **kwargs):
+            self.calls += 1
+            if "公司一手材料" in kwargs["input"]:
+                return type("Result", (), {"output_text": json.dumps({"company_signals": [{
+                    "company": "英伟达", "ticker": "NVDA", "stance": "等待",
+                    "brief": "新品需求仍强，但估值偏高，等待业绩确认后再行动。",
+                    "trigger": "收入指引继续上调", "risk": "云厂商资本开支放缓", "source": "NVIDIA IR",
+                }]}, ensure_ascii=False)})()
+            return Output()
+
+    client = type("CompanyClient", (), {"responses": CompanyResponses()})()
+    analyzer = OpenAIAnalyzer(Settings.from_env(tmp_path), client=client)
+    result = analyzer.analyze({
+        "market": {"NVDA": 100},
+        "sources": [{"name": "NVIDIA IR", "kind": "company", "status": "SUCCESS", "text": "Q2 earnings and guidance"}],
+    })
+
+    assert client.responses.calls == 2
+    assert result["company_signals"][0]["ticker"] == "NVDA"
+    assert result["company_signals"][0]["stance"] == "等待"
 
 
 def test_mailer_uses_dated_url_and_authenticated_sender(tmp_path, monkeypatch):

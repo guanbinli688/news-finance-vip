@@ -11,15 +11,19 @@ def test_stage_public_site_copies_report_and_safe_audit(tmp_path, monkeypatch):
     settings.html_file.write_text("<html><body>report</body></html>", encoding="utf-8")
     settings.audit_file.parent.mkdir(parents=True)
     settings.audit_file.write_text(json.dumps({"report_date": "2030-01-02"}), encoding="utf-8")
+    stale_dir = tmp_path / "docs" / "0102"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "index.html").write_text("stale", encoding="utf-8")
+    (tmp_path / "docs" / "index.html").write_text("stale", encoding="utf-8")
 
     output = stage_public_site(settings)
 
-    assert output == tmp_path / "docs" / "index.html"
+    assert output == tmp_path / "docs" / "0102.html"
     assert output.read_text(encoding="utf-8") == "<html><body>report</body></html>"
-    assert (tmp_path / "docs" / "0102.html").read_text(encoding="utf-8") == output.read_text(encoding="utf-8")
-    assert (tmp_path / "docs" / "0102" / "index.html").read_text(encoding="utf-8") == output.read_text(encoding="utf-8")
+    assert not (tmp_path / "docs" / "index.html").exists()
+    assert not (tmp_path / "docs" / "0102").exists()
     audit = json.loads((tmp_path / "docs" / "audit.json").read_text(encoding="utf-8"))
     assert audit["report_date"] == "2030-01-02"
     assert audit["public_file"] == "0102.html"
-    assert audit["public_path"] == "0102/"
+    assert audit["public_path"] == "0102.html"
     assert (tmp_path / "docs" / ".nojekyll").exists()

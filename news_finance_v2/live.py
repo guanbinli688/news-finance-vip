@@ -122,31 +122,9 @@ class OpenAIAnalyzer:
         self.client = client
         self.repository = RadarRepository(settings.db_file)
 
-    def analyze(self, collected):
-        compact_sources = [{k: r.get(k) for k in ("name", "kind", "status", "text")} for r in collected.get("sources", [])]
-        prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
-        prompt += "\n来源证据：\n" + json.dumps(compact_sources, ensure_ascii=False)[:30000]
-        prompt += """
-\n请生成中文机构晨报所需的完整 JSON：
-{
-  "direction":{"title":"","brief":"","bias":"偏积极|偏谨慎|中性"},
-  "horizons":[
-    {"days":"3-5","direction":"","focus":[],"brief":"","risk":""},
-    {"days":"5-10","direction":"","focus":[],"brief":"","risk":""},
-    {"days":"10-15","direction":"","focus":[],"brief":"","risk":""}
-  ],
-  "actions":{"watch":[],"prepare":[],"avoid":[]},
-  "flows":[{"from":"","to":"","brief":""}],
-  "logic":[{"cause":"","middle":"","result":"","action":""}],
-  "company_signals":[{"company":"","signal":"","brief":"","source":""}],
-  "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","sources":[]}],
-  "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
-}
-约束：只输出 JSON；所有展示文案使用中文；horizons 必须正好三项；actions 每组最多三项；flows 最多三项；logic 最多四项；company_signals 最多四项且只使用 company 类一手来源；media_themes 最多四项并列出来源名；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
-"""
-        system_prompt = "你是克制的跨资产研究员。只依据输入证据，不承诺收益。严格输出JSON。"
+    def _complete_json(self, purpose: str, system_prompt: str, prompt: str):
         key = make_cache_key(
-            provider=self.settings.ai_provider, model=self.settings.ai_model, purpose="master",
+            provider=self.settings.ai_provider, model=self.settings.ai_model, purpose=purpose,
             system_prompt=system_prompt, user_prompt=prompt, prompt_version=self.settings.prompt_version,
         )
         now = datetime.now(timezone.utc)
@@ -161,7 +139,58 @@ class OpenAIAnalyzer:
         raw = response.output_text.strip()
         raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.I).strip()
         parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError(f"AI {purpose} 输出必须是JSON对象")
         self.repository.cache_set(key, parsed, expires_at=now + timedelta(hours=self.settings.cache_ttl_hours))
+        return parsed
+
+    def analyze(self, collected):
+        compact_sources = []
+        for record in collected.get("sources", []):
+            text = " ".join(str(record.get("text", "")).split())
+            limit = 1600 if record.get("kind") == "company" else 900
+            compact_sources.append({
+                "name": record.get("name"), "kind": record.get("kind"),
+                "status": record.get("status"), "text": text[:limit],
+            })
+        prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prompt += "\n来源证据：\n" + json.dumps(compact_sources, ensure_ascii=False)
+        prompt += """
+\n请生成中文机构晨报所需的完整 JSON：
+{
+  "direction":{"title":"","brief":"","bias":"偏积极|偏谨慎|中性"},
+  "horizons":[
+    {"days":"3-5","direction":"","focus":[],"brief":"","risk":""},
+    {"days":"5-10","direction":"","focus":[],"brief":"","risk":""},
+    {"days":"10-15","direction":"","focus":[],"brief":"","risk":""}
+  ],
+  "actions":{"watch":[],"prepare":[],"avoid":[]},
+  "flows":[{"from":"","to":"","brief":""}],
+  "logic":[{"cause":"","middle":"","result":"","action":""}],
+  "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","impact":"","sources":[]}],
+  "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
+}
+约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
+"""
+        system_prompt = "你是克制、直接的中文跨资产投资研究员。只依据输入证据，先给动作再给原因，不承诺收益。严格输出JSON。"
+        parsed = self._complete_json("master", system_prompt, prompt)
+
+        company_sources = [
+            item for item in compact_sources
+            if item.get("kind") == "company" and item.get("status") == "SUCCESS" and item.get("text")
+        ]
+        if company_sources:
+            company_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+            company_prompt += "\n公司一手材料：\n" + json.dumps(company_sources, ensure_ascii=False)
+            company_prompt += """
+\n只从上述公司一手材料中筛选最多4个真正可交易的增量信号，输出：
+{"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
+硬约束：只输出JSON；除ticker和source外全部使用简体中文；不要翻译或复述整段网页；不要使用公司自我介绍、导航词和宣传语；没有财报、指引、订单、资本开支、产品、监管、回购分红等增量事实的公司不要入选；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
+"""
+            company_system = "你是中文美股研究负责人。把公司公告压缩为可执行的股票观察结论，只输出JSON。"
+            company_result = self._complete_json("company", company_system, company_prompt)
+            signals = company_result.get("company_signals", [])
+            parsed["company_signals"] = signals[:4] if isinstance(signals, list) else []
         return parsed
 
 

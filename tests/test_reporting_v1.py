@@ -15,7 +15,11 @@ def rich_context():
             {"name": "NVIDIA IR", "kind": "company", "status": "SUCCESS", "text": "AI demand remains strong", "url": "https://example.test/ir"},
             {"name": "CNBC Markets", "kind": "media", "status": "SUCCESS", "text": "Market narrative", "url": "https://example.test/media"},
         ],
-        "company_signals": [{"company": "NVIDIA", "signal": "需求仍有韧性", "brief": "订单与产能是下一阶段观察重点。", "source": "NVIDIA IR"}],
+        "company_signals": [{
+            "company": "英伟达", "ticker": "NVDA", "stance": "关注",
+            "brief": "需求仍有韧性，但应等待订单与产能继续确认。",
+            "trigger": "收入指引继续上调", "risk": "云厂商资本开支放缓", "source": "NVIDIA IR",
+        }],
         "media_themes": [{"title": "市场等待政策确认", "tone": "谨慎", "brief": "主流讨论聚焦利率路径与盈利兑现。", "sources": ["CNBC Markets"]}],
         "display_predictions": [{"horizon_days": 5, "target": "SPY", "direction": "UP", "probability": .6, "thesis": "趋势改善", "invalidation": "跌破关键位"}],
         "gate": EvidenceGate(True, ()), "core_failures": [], "market_coverage": 1.0,
@@ -23,13 +27,13 @@ def rich_context():
     }
 
 
-def test_report_restores_v1_brand_and_seven_sections():
+def test_report_keeps_v2_layout_with_chinese_labels_and_seven_sections():
     report = render_report(rich_context())
     for text in (
-        "NEWS FINANCE · MARKET INTELLIGENCE", "投资方向研究简报",
-        "一｜今日投资方向", "二｜动作", "三｜未来14日重要日程",
+        "NEWS FINANCE · 投资情报", "投资方向研究简报",
+        "一｜今日投资方向", "二｜具体动作", "三｜未来14日重要日程",
         "四｜资金流向与投资逻辑", "五｜重点公司前瞻",
-        "六｜市场正在讨论什么", "七｜预测与验证", "数据完整性",
+        "六｜市场正在交易什么", "七｜预测与验证", "数据完整性",
     ):
         assert text in report
     assert 'class="horizon-grid"' in report
@@ -62,10 +66,22 @@ def test_report_translates_known_bls_calendar_events_to_chinese():
     assert "Summer Youth Labor Force" not in report
 
 
-def test_report_keeps_unknown_calendar_event_title():
+def test_report_hides_untranslated_english_calendar_event_title():
     context = rich_context()
     context["events"] = [{"date": "2026-08-20", "title": "New Unmapped Release", "source": "BLS"}]
 
     report = render_report(context)
 
-    assert "New Unmapped Release" in report
+    assert "美国劳工统计局数据发布" in report
+    assert "New Unmapped Release" not in report
+
+
+def test_report_never_falls_back_to_raw_english_company_pages():
+    context = rich_context()
+    context["company_signals"] = []
+    context["sources"][0]["text"] = "Skip to main content Latest News Investor Relations " * 20
+
+    report = render_report(context)
+
+    assert "本轮未形成可执行的公司信号" in report
+    assert "Skip to main content" not in report
