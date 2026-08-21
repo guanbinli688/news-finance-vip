@@ -23,7 +23,7 @@ class Session:
 
 def test_http_collector_records_core_failure_and_market_coverage(tmp_path):
     settings = Settings.from_env(tmp_path)
-    session = Session([Response(503)] + [Response() for _ in range(10)])
+    session = Session([Response(503)] + [Response() for _ in range(100)])
     collector = HttpCollector(
         settings, session=session,
         market_loader=lambda symbols: {symbol: 100.0 for symbol in symbols[:-1]},
@@ -38,13 +38,19 @@ def test_http_collector_records_core_failure_and_market_coverage(tmp_path):
 
 def test_full_collection_adds_company_ir_sources(tmp_path):
     settings = Settings.from_env(tmp_path)
-    session = Session([Response() for _ in range(24)])
-    collector = HttpCollector(settings, session=session, market_loader=lambda symbols: {s: 1 for s in symbols})
+    session = Session([Response() for _ in range(100)])
+    collector = HttpCollector(
+        settings, session=session,
+        market_loader=lambda symbols: {s: 1 for s in symbols},
+        stock_loader=lambda symbols: {s: {"price": 1, "volatility_20_pct": 1} for s in symbols},
+    )
     regular = collector.collect(full=False)
-    session.responses = iter([Response() for _ in range(24)])
+    session.responses = iter([Response() for _ in range(100)])
     full = collector.collect(full=True)
     assert len(full["sources"]) > len(regular["sources"])
     assert any(item["kind"] == "company" for item in full["sources"])
+    assert any(item["kind"] == "company_news" for item in full["sources"])
+    assert len(full["stock_snapshot"]) == 20
 
 
 def test_ics_events_are_limited_to_forward_window():
@@ -57,7 +63,7 @@ def test_collector_parses_calendar_from_untruncated_ics(tmp_path, monkeypatch):
     monkeypatch.setenv("REPORT_DATE_OVERRIDE", "2026-08-19")
     settings = Settings.from_env(tmp_path)
     ics = "X" * 13000 + "\nBEGIN:VEVENT\nDTSTART:20260820T123000Z\nSUMMARY:Initial Jobless Claims\nEND:VEVENT"
-    session = Session([Response(text=ics)] + [Response() for _ in range(10)])
+    session = Session([Response(text=ics)] + [Response() for _ in range(100)])
     collector = HttpCollector(settings, session=session, market_loader=lambda symbols: {s: 1 for s in symbols})
 
     result = collector.collect(full=False)
@@ -112,6 +118,7 @@ def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypa
         def create(self, **kwargs):
             self.calls += 1
             if "公司一手材料" in kwargs["input"]:
+                assert "个股市场状态" in kwargs["input"]
                 return type("Result", (), {"output_text": json.dumps({"company_signals": [{
                     "company": "英伟达", "ticker": "NVDA", "stance": "等待",
                     "brief": "新品需求仍强，但估值偏高，等待业绩确认后再行动。",
@@ -123,12 +130,27 @@ def test_openai_analyzer_runs_dedicated_company_decision_pass(tmp_path, monkeypa
     analyzer = OpenAIAnalyzer(Settings.from_env(tmp_path), client=client)
     result = analyzer.analyze({
         "market": {"NVDA": 100},
+        "stock_snapshot": {"NVDA": {"price": 100, "volatility_20_pct": 2}},
         "sources": [{"name": "NVIDIA IR", "kind": "company", "status": "SUCCESS", "text": "Q2 earnings and guidance"}],
     })
 
     assert client.responses.calls == 2
     assert result["company_signals"][0]["ticker"] == "NVDA"
     assert result["company_signals"][0]["stance"] == "等待"
+
+
+def test_company_signal_guard_caps_focus_and_rejects_unknown_tickers():
+    signals = [
+        {"ticker": ticker, "stance": "关注", "brief": "中文结论"}
+        for ticker in ("NVDA", "MSFT", "JPM", "XOM", "FAKE")
+    ]
+    snapshot = {ticker: {"price": 100} for ticker in ("NVDA", "MSFT", "JPM", "XOM")}
+
+    selected = OpenAIAnalyzer._limit_company_signals(signals, snapshot)
+
+    assert len(selected) == 4
+    assert sum(item["stance"] == "关注" for item in selected) == 3
+    assert selected[-1]["stance"] == "等待"
 
 
 def test_mailer_uses_dated_url_and_authenticated_sender(tmp_path, monkeypatch):

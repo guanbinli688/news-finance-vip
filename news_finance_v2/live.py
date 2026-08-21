@@ -4,8 +4,10 @@ import json
 import re
 import smtplib
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
+from xml.etree import ElementTree
 
 import requests
 from bs4 import BeautifulSoup
@@ -13,7 +15,10 @@ from bs4 import BeautifulSoup
 from .config import Settings
 from .db import RadarRepository, make_cache_key
 from .market import SIGNALS
-from .sources import BASE_COMPANY_SOURCES, FULL_COMPANY_SOURCES, MEDIA_SOURCES, OFFICIAL_SOURCES
+from .sources import (
+    BASE_COMPANY_SOURCES, COMPANY_SYMBOLS, COMPANY_UNIVERSE,
+    FULL_COMPANY_SOURCES, MEDIA_SOURCES, OFFICIAL_SOURCES,
+)
 from .verification import verify_absolute, verify_relative
 
 
@@ -56,9 +61,59 @@ def _default_market_loader(symbols):
     return result
 
 
+def _default_stock_loader(symbols):
+    import yfinance as yf
+    frame = yf.download(
+        list(symbols), period="3mo", auto_adjust=True, progress=False,
+        threads=True, group_by="ticker",
+    )
+    result = {}
+    if frame is None or frame.empty:
+        return result
+    for symbol in symbols:
+        try:
+            data = frame[symbol] if hasattr(frame.columns, "levels") else frame
+            close = data["Close"].dropna()
+            if len(close) < 22:
+                continue
+            returns = close.pct_change().dropna().tail(20)
+            latest = float(close.iloc[-1])
+            previous = float(close.iloc[-2])
+            recent = close.tail(20)
+            ma20 = float(recent.mean())
+            ma50 = float(close.tail(50).mean())
+            result[symbol] = {
+                "price": round(latest, 4),
+                "day_change_pct": round((latest / previous - 1) * 100, 3),
+                "month_change_pct": round((latest / float(close.iloc[-21]) - 1) * 100, 3),
+                "volatility_20_pct": round(float(returns.std()) * 100, 3),
+                "drawdown_20_pct": round((latest / float(recent.max()) - 1) * 100, 3),
+                "above_ma20": latest >= ma20,
+                "above_ma50": latest >= ma50,
+            }
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+    return result
+
+
+def _rss_text(source: str) -> str:
+    try:
+        root = ElementTree.fromstring(source or "")
+    except ElementTree.ParseError:
+        return ""
+    titles = []
+    for item in root.findall(".//item")[:8]:
+        title = " ".join((item.findtext("title") or "").split())
+        published = " ".join((item.findtext("pubDate") or "").split())
+        if title:
+            titles.append(f"{published}｜{title}" if published else title)
+    return "\n".join(titles)[:8000]
+
+
 class HttpCollector:
-    def __init__(self, settings: Settings, *, session=None, market_loader=None):
+    def __init__(self, settings: Settings, *, session=None, market_loader=None, stock_loader=None):
         self.settings = settings
+        self._external_session = session is not None
         self.session = session or requests.Session()
         contact = settings.sec_user_agent or "independent-research contact@example.org"
         self.session.headers.update({
@@ -66,20 +121,32 @@ class HttpCollector:
             "Accept-Language": "en-US,en;q=0.9",
         })
         self.market_loader = market_loader or _default_market_loader
+        self.stock_loader = stock_loader or _default_stock_loader
 
     def collect(self, full=False):
-        records = []
         evidence_kinds = {"market"}
-        for name, url, core in OFFICIAL_SOURCES:
-            records.append(self._fetch(name, url, "official", core))
-        for name, url in MEDIA_SOURCES:
-            records.append(self._fetch(name, url, "media", False))
-        for name, url in BASE_COMPANY_SOURCES:
-            records.append(self._fetch(name, url, "company", False))
+        specs = [(name, url, "official", core) for name, url, core in OFFICIAL_SOURCES]
+        specs += [(name, url, "media", False) for name, url in MEDIA_SOURCES]
+        specs += [(name, url, "company", False) for name, url in BASE_COMPANY_SOURCES]
         if full:
-            for name, url in FULL_COMPANY_SOURCES:
-                records.append(self._fetch(name, url, "company", False))
+            specs += [(name, url, "company", False) for name, url in FULL_COMPANY_SOURCES]
+        if self._external_session:
+            records = [self._fetch(*spec) for spec in specs]
+        else:
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                records = list(executor.map(lambda spec: self._fetch(*spec), specs))
+        if full:
+            news_specs = [
+                (f"{symbol} 新闻", f"https://finance.yahoo.com/rss/2.0/headline?s={symbol}", symbol)
+                for symbol in COMPANY_UNIVERSE
+            ]
+            if self._external_session:
+                records += [self._fetch_company_news(*spec) for spec in news_specs]
+            else:
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    records += list(executor.map(lambda spec: self._fetch_company_news(*spec), news_specs))
         market = self.market_loader(list(SIGNALS))
+        stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
         if any(r["status"] == "SUCCESS" and r["kind"] == "official" for r in records):
             evidence_kinds.add("official")
         if any(r["status"] == "SUCCESS" and r["kind"] == "media" for r in records):
@@ -92,6 +159,7 @@ class HttpCollector:
             "sources": records, "core_failures": core_failures,
             "evidence_kinds": evidence_kinds, "market": market,
             "market_coverage": len(market) / len(SIGNALS), "events": events,
+            "stock_snapshot": stock_snapshot,
         }
 
     def _fetch(self, name, url, kind, core):
@@ -109,6 +177,23 @@ class HttpCollector:
             return {"name": name, "url": url, "kind": kind, "core": core, "status": "TIMEOUT", "text": "", "message": str(exc)}
         except requests.RequestException as exc:
             return {"name": name, "url": url, "kind": kind, "core": core, "status": "NETWORK_ERROR", "text": "", "message": str(exc)}
+
+    def _fetch_company_news(self, name, url, symbol):
+        try:
+            response = self.session.get(url, timeout=self.settings.timeout_seconds, allow_redirects=True)
+            status = "SUCCESS" if response.status_code == 200 else f"HTTP_{response.status_code}"
+            text = _rss_text(response.text) if status == "SUCCESS" else ""
+            if status == "SUCCESS" and not text:
+                status = "EMPTY"
+            return {
+                "name": name, "url": url, "final_url": str(response.url),
+                "kind": "company_news", "symbol": symbol, "core": False,
+                "status": status, "text": text, "message": "",
+            }
+        except requests.Timeout as exc:
+            return {"name": name, "url": url, "kind": "company_news", "symbol": symbol, "core": False, "status": "TIMEOUT", "text": "", "message": str(exc)}
+        except requests.RequestException as exc:
+            return {"name": name, "url": url, "kind": "company_news", "symbol": symbol, "core": False, "status": "NETWORK_ERROR", "text": "", "message": str(exc)}
 
 
 class OpenAIAnalyzer:
@@ -148,13 +233,19 @@ class OpenAIAnalyzer:
         compact_sources = []
         for record in collected.get("sources", []):
             text = " ".join(str(record.get("text", "")).split())
-            limit = 1600 if record.get("kind") == "company" else 900
+            kind = record.get("kind")
+            limit = 1200 if kind == "company" else (700 if kind == "company_news" else 900)
             compact_sources.append({
-                "name": record.get("name"), "kind": record.get("kind"),
+                "name": record.get("name"), "kind": kind,
+                "symbol": record.get("symbol") or COMPANY_SYMBOLS.get(record.get("name")),
                 "status": record.get("status"), "text": text[:limit],
             })
+        macro_sources = [
+            item for item in compact_sources
+            if item.get("kind") in {"official", "media"}
+        ]
         prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
-        prompt += "\n来源证据：\n" + json.dumps(compact_sources, ensure_ascii=False)
+        prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
         prompt += """
 \n请生成中文机构晨报所需的完整 JSON：
 {
@@ -177,21 +268,57 @@ class OpenAIAnalyzer:
 
         company_sources = [
             item for item in compact_sources
-            if item.get("kind") == "company" and item.get("status") == "SUCCESS" and item.get("text")
+            if item.get("kind") in {"company", "company_news"}
+            and item.get("status") == "SUCCESS" and item.get("text")
         ]
         if company_sources:
             company_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
-            company_prompt += "\n公司一手材料：\n" + json.dumps(company_sources, ensure_ascii=False)
+            company_prompt += "\n个股市场状态：\n" + json.dumps(collected.get("stock_snapshot", {}), ensure_ascii=False)
+            company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
-\n只从上述公司一手材料中筛选最多4个真正可交易的增量信号，输出：
+\n从上述候选中筛选最多6个真正可交易的增量信号，输出：
 {"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
-硬约束：只输出JSON；除ticker和source外全部使用简体中文；不要翻译或复述整段网页；不要使用公司自我介绍、导航词和宣传语；没有财报、指引、订单、资本开支、产品、监管、回购分红等增量事实的公司不要入选；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
+硬约束：只输出JSON；除ticker和source外全部使用简体中文；最多3只标记“关注”，其余只能“等待/回避”；“关注”必须同时具备可验证的正向增量事实、可接受的趋势/回撤和清晰触发条件，不能只凭网站介绍或单条媒体标题；优先质量与行业分散，不为凑数量而入选；逐股比较当日跌幅与该股20日波动率，不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
 """
             company_system = "你是中文美股研究负责人。把公司公告压缩为可执行的股票观察结论，只输出JSON。"
             company_result = self._complete_json("company", company_system, company_prompt)
             signals = company_result.get("company_signals", [])
-            parsed["company_signals"] = signals[:4] if isinstance(signals, list) else []
+            parsed["company_signals"] = self._limit_company_signals(
+                signals, collected.get("stock_snapshot", {})
+            )
+        else:
+            parsed["company_signals"] = []
         return parsed
+
+    @staticmethod
+    def _limit_company_signals(signals, stock_snapshot):
+        if not isinstance(signals, list):
+            return []
+        allowed = set(COMPANY_UNIVERSE)
+        selected = []
+        seen = set()
+        focus_count = 0
+        for raw in signals:
+            if not isinstance(raw, dict):
+                continue
+            item = dict(raw)
+            ticker = str(item.get("ticker", "")).strip().upper()
+            if ticker not in allowed or ticker in seen:
+                continue
+            seen.add(ticker)
+            stance = str(item.get("stance", "等待")).strip()
+            if stance not in {"关注", "等待", "回避"}:
+                stance = "等待"
+            if stance == "关注" and (focus_count >= 3 or ticker not in stock_snapshot):
+                stance = "等待"
+            if stance == "关注":
+                focus_count += 1
+            item["ticker"] = ticker
+            item["stance"] = stance
+            selected.append(item)
+            if len(selected) == 6:
+                break
+        return selected
 
 
 class SMTPMailer:

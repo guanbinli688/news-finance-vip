@@ -24,7 +24,7 @@ jobs:
       AI_PROVIDER: openai
       AI_MODEL: ${{ vars.AI_MODEL || 'gpt-5.4-mini' }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      PROMPT_VERSION: v2.1-pages
+      PROMPT_VERSION: v2.2-expanded-universe
       HTTP_TIMEOUT: "25"
       CACHE_TTL_HOURS: "20"
       MARKET_COVERAGE_THRESHOLD: "0.80"

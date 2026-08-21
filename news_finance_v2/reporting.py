@@ -36,12 +36,24 @@ BLS_EVENT_TRANSLATIONS = {
 SOURCE_LABELS = {
     "BLS": "美国劳工统计局", "BEA": "美国经济分析局",
     "Federal Reserve": "美联储", "Treasury Auctions": "美国财政部",
+    "White House": "美国白宫", "US Census": "美国人口普查局",
+    "EIA": "美国能源信息署", "Treasury Press": "美国财政部新闻",
+    "USTR": "美国贸易代表办公室", "State Department": "美国国务院",
+    "Federal Register": "美国联邦公报",
     "AP Business": "美联社商业", "CNBC Markets": "CNBC市场",
-    "Financial Times": "英国金融时报", "JPM IR": "摩根大通公告",
+    "Financial Times": "英国金融时报", "Reuters Markets": "路透市场",
+    "MarketWatch": "市场观察", "Yahoo Finance": "雅虎财经",
+    "JPM IR": "摩根大通公告",
     "Walmart IR": "沃尔玛公告", "Microsoft IR": "微软公告",
     "Amazon IR": "亚马逊公告", "NVIDIA IR": "英伟达公告",
+    "Alphabet IR": "谷歌母公司公告", "Apple IR": "苹果公告",
+    "Costco IR": "开市客公告", "ExxonMobil IR": "埃克森美孚公告",
     "TSMC IR": "台积电公告", "Broadcom IR": "博通公告",
-    "Micron IR": "美光科技公告",
+    "Alibaba IR": "阿里巴巴公告", "Tencent IR": "腾讯公告",
+    "Micron IR": "美光科技公告", "Tesla IR": "特斯拉公告",
+    "Eli Lilly IR": "礼来公告", "UnitedHealth IR": "联合健康公告",
+    "Caterpillar IR": "卡特彼勒公告", "Goldman Sachs IR": "高盛公告",
+    "Visa IR": "维萨公告",
 }
 
 COMPANY_LABELS = {
@@ -50,6 +62,12 @@ COMPANY_LABELS = {
     "AMZN": "亚马逊", "AMAZON": "亚马逊", "NVDA": "英伟达",
     "NVIDIA": "英伟达", "TSM": "台积电", "TSMC": "台积电",
     "AVGO": "博通", "BROADCOM": "博通", "MU": "美光科技", "MICRON": "美光科技",
+    "GOOGL": "谷歌", "ALPHABET": "谷歌", "AAPL": "苹果", "APPLE": "苹果",
+    "COST": "开市客", "COSTCO": "开市客", "XOM": "埃克森美孚",
+    "EXXONMOBIL": "埃克森美孚", "BABA": "阿里巴巴", "ALIBABA": "阿里巴巴",
+    "TCEHY": "腾讯", "TENCENT": "腾讯", "TSLA": "特斯拉", "TESLA": "特斯拉",
+    "LLY": "礼来", "UNH": "联合健康", "CAT": "卡特彼勒",
+    "GS": "高盛", "V": "维萨", "VISA": "维萨",
 }
 
 DIRECTION_LABELS = {
@@ -126,7 +144,9 @@ def _source_cards(context, kind):
     source_urls = {str(x.get("name")): x.get("url", "#") for x in context.get("sources", [])}
     curated = context.get("company_signals" if kind == "company" else "media_themes", [])
     curated_cards = []
-    for item in curated[:4]:
+    focus_count = 0
+    limit = 6 if kind == "company" else 3
+    for item in curated[:limit]:
         if kind == "company":
             brief = str(item.get("brief") or "").strip()
             if not _has_chinese(brief):
@@ -139,6 +159,10 @@ def _source_cards(context, kind):
             label = str(item.get("stance") or item.get("signal") or "等待").strip()
             if label not in {"关注", "等待", "回避"}:
                 label = "等待"
+            if label == "关注" and focus_count >= 3:
+                label = "等待"
+            if label == "关注":
+                focus_count += 1
             trigger = str(item.get("trigger") or "").strip()
             risk = str(item.get("risk") or "").strip()
             source_names = [str(item.get("source", ""))]
@@ -153,10 +177,24 @@ def _source_cards(context, kind):
             impact = str(item.get("impact") or "").strip()
             source_names = [str(x) for x in item.get("sources", [])]
         source_names = [x for x in source_names if x]
-        source_label = " · ".join(SOURCE_LABELS.get(x, x) for x in source_names) or "公开来源"
+        source_label = " · ".join(
+            SOURCE_LABELS.get(x, f"{x[:-3]}动态新闻" if x.endswith(" 新闻") else x)
+            for x in source_names
+        ) or "公开来源"
         source_url = next((source_urls[x] for x in source_names if x in source_urls), "#")
         details = ""
         if kind == "company":
+            snapshot = context.get("stock_snapshot", {}).get(ticker, {})
+            if snapshot:
+                price_text = f"{float(snapshot.get('price', 0)):.2f}"
+                day_text = f"{float(snapshot.get('day_change_pct', 0)):+.2f}%"
+                volatility_text = f"{float(snapshot.get('volatility_20_pct', 0)):.2f}%"
+                details += (
+                    "<div class='stock-meta'>"
+                    f"现价 ${esc(price_text)}　当日 {esc(day_text)}　"
+                    f"20日波动 {esc(volatility_text)}"
+                    "</div>"
+                )
             if _has_chinese(trigger):
                 details += f"<div class='card-note'><strong>触发：</strong>{esc(trigger)}</div>"
             if _has_chinese(risk):
@@ -188,7 +226,7 @@ def _predictions(context):
 
 
 CSS = """
-:root{--navy:#17365d;--blue:#005ea8;--red:#d83933;--ink:#111820;--muted:#586675;--line:#cbd2d9}*{box-sizing:border-box}body{margin:0;background:#eee;font:16px/1.55 Arial,"Microsoft YaHei",sans-serif;color:var(--ink)}.wrap,main{max-width:1380px;margin:auto}.top-strip{background:#f7f7f7;border-bottom:1px solid #d9d9d9;font-size:12px;color:#38495a;padding:8px 36px}header{background:#fff;padding:18px 36px}.brand{display:flex;align-items:center;gap:22px}.logo{width:90px;height:90px}.eyebrow,.kicker{font-size:12px;letter-spacing:2px;font-weight:700;color:#637587}h1{font-size:34px;line-height:1.1;color:#082d59;margin:7px 0 3px}.subtitle{color:#43576b}.navbar{background:var(--navy);border-bottom:5px solid var(--red);color:#fff;font-weight:700;padding:13px 36px}main{background:#fff;border:1px solid #d4d8dc;margin-top:28px;margin-bottom:28px;padding:8px 44px 48px}section{padding:32px 0;border-top:3px solid var(--navy)}section:first-child{border-top:0}h2{font-size:25px;color:#082d59;margin:5px 0 18px}h3{color:#082d59}.hero{background:#eaf4fb;border-left:7px solid var(--blue);padding:20px 24px;margin-bottom:16px}.hero-title{font-size:25px;font-weight:800;color:#082d59}.hero-text{margin-top:8px}.horizon-grid,.action-grid,.source-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.horizon{border:1px solid var(--line);border-top:5px solid var(--blue);padding:16px;min-height:165px}.horizon-time{color:#004b87;font-weight:700}.horizon-direction{font-size:21px;font-weight:800;color:#082d59;margin:7px 0}.focus{color:#596b7c}.risk,.card-risk{color:#b42318;font-size:14px}.action-box{border:1px solid var(--line);padding:16px;min-height:135px}.action-box h3{margin-top:0}.calendar-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.day{border:1px solid var(--line);border-top:5px solid var(--blue);padding:14px;min-height:150px}.day h3{margin:0;font-size:19px}.weekday{color:#667788;border-bottom:1px solid var(--line);padding:2px 0 10px}.event{margin-top:10px}.event span{background:var(--blue);color:white;border-radius:3px;padding:3px 6px;margin-right:6px}.event strong{font-size:13px}.event small{display:block;color:#52677b;margin-top:5px}.logic-root{background:var(--navy);color:#fff;font-size:21px;font-weight:800;text-align:center;padding:16px}.flow{display:flex;gap:20px;border-left:4px solid var(--blue);background:#f3f6f8;padding:12px 15px;margin-top:8px}.logic-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:14px}.logic{border:1px solid var(--line);padding:15px;display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:8px;align-items:center}.logic em{grid-column:1/-1;color:#8a2b20;font-style:normal;font-weight:700}.source-grid{grid-template-columns:repeat(2,1fr)}.source-card{border:1px solid var(--line);border-left:4px solid var(--blue);padding:15px}.card-label{display:inline-block;background:#eaf4fb;color:#004b87;font-size:12px;font-weight:800;padding:3px 8px;margin-bottom:8px}.source-card h3{margin:0 0 7px}.source-card p{color:#243b53;margin:7px 0}.card-note,.card-risk{border-top:1px solid #e1e6eb;padding-top:7px;margin-top:7px}.source-card a{display:inline-block;color:#005ea8;font-size:13px;margin-top:9px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th{background:var(--navy);color:#fff;text-align:left}th,td{border:1px solid var(--line);padding:11px;vertical-align:top}.audit-ok,.audit-warn{padding:15px;border-left:6px solid}.audit-ok{background:#e9f6ec;border-color:#168821}.audit-warn{background:#fff1f0;border-color:var(--red)}.metrics{display:flex;gap:28px;margin-top:14px}.muted{color:#6c7883}footer{background:var(--navy);color:#fff;padding:26px 36px;font-size:13px}@media(max-width:900px){.horizon-grid,.action-grid,.source-grid,.logic-grid{grid-template-columns:1fr}.calendar-grid{grid-template-columns:repeat(2,1fr)}main{margin:0;padding:20px}.logo{width:65px}.navbar{font-size:12px}}
+:root{--navy:#17365d;--blue:#005ea8;--red:#d83933;--ink:#111820;--muted:#586675;--line:#cbd2d9}*{box-sizing:border-box}body{margin:0;background:#eee;font:16px/1.55 Arial,"Microsoft YaHei",sans-serif;color:var(--ink)}.wrap,main{max-width:1380px;margin:auto}.top-strip{background:#f7f7f7;border-bottom:1px solid #d9d9d9;font-size:12px;color:#38495a;padding:8px 36px}header{background:#fff;padding:18px 36px}.brand{display:flex;align-items:center;gap:22px}.logo{width:90px;height:90px}.eyebrow,.kicker{font-size:12px;letter-spacing:2px;font-weight:700;color:#637587}h1{font-size:34px;line-height:1.1;color:#082d59;margin:7px 0 3px}.subtitle{color:#43576b}.navbar{background:var(--navy);border-bottom:5px solid var(--red);color:#fff;font-weight:700;padding:13px 36px}main{background:#fff;border:1px solid #d4d8dc;margin-top:28px;margin-bottom:28px;padding:8px 44px 48px}section{padding:32px 0;border-top:3px solid var(--navy)}section:first-child{border-top:0}h2{font-size:25px;color:#082d59;margin:5px 0 18px}h3{color:#082d59}.hero{background:#eaf4fb;border-left:7px solid var(--blue);padding:20px 24px;margin-bottom:16px}.hero-title{font-size:25px;font-weight:800;color:#082d59}.hero-text{margin-top:8px}.horizon-grid,.action-grid,.source-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.horizon{border:1px solid var(--line);border-top:5px solid var(--blue);padding:16px;min-height:165px}.horizon-time{color:#004b87;font-weight:700}.horizon-direction{font-size:21px;font-weight:800;color:#082d59;margin:7px 0}.focus{color:#596b7c}.risk,.card-risk{color:#b42318;font-size:14px}.action-box{border:1px solid var(--line);padding:16px;min-height:135px}.action-box h3{margin-top:0}.calendar-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.day{border:1px solid var(--line);border-top:5px solid var(--blue);padding:14px;min-height:150px}.day h3{margin:0;font-size:19px}.weekday{color:#667788;border-bottom:1px solid var(--line);padding:2px 0 10px}.event{margin-top:10px}.event span{background:var(--blue);color:white;border-radius:3px;padding:3px 6px;margin-right:6px}.event strong{font-size:13px}.event small{display:block;color:#52677b;margin-top:5px}.logic-root{background:var(--navy);color:#fff;font-size:21px;font-weight:800;text-align:center;padding:16px}.flow{display:flex;gap:20px;border-left:4px solid var(--blue);background:#f3f6f8;padding:12px 15px;margin-top:8px}.logic-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:14px}.logic{border:1px solid var(--line);padding:15px;display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:8px;align-items:center}.logic em{grid-column:1/-1;color:#8a2b20;font-style:normal;font-weight:700}.source-grid{grid-template-columns:repeat(2,1fr)}.source-card{border:1px solid var(--line);border-left:4px solid var(--blue);padding:15px}.card-label{display:inline-block;background:#eaf4fb;color:#004b87;font-size:12px;font-weight:800;padding:3px 8px;margin-bottom:8px}.source-card h3{margin:0 0 7px}.source-card p{color:#243b53;margin:7px 0}.stock-meta{background:#f3f6f8;color:#40566b;font-size:13px;padding:6px 8px;margin:6px 0}.card-note,.card-risk{border-top:1px solid #e1e6eb;padding-top:7px;margin-top:7px}.source-card a{display:inline-block;color:#005ea8;font-size:13px;margin-top:9px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th{background:var(--navy);color:#fff;text-align:left}th,td{border:1px solid var(--line);padding:11px;vertical-align:top}.audit-ok,.audit-warn{padding:15px;border-left:6px solid}.audit-ok{background:#e9f6ec;border-color:#168821}.audit-warn{background:#fff1f0;border-color:var(--red)}.metrics{display:flex;gap:28px;margin-top:14px}.muted{color:#6c7883}footer{background:var(--navy);color:#fff;padding:26px 36px;font-size:13px}@media(max-width:900px){.horizon-grid,.action-grid,.source-grid,.logic-grid{grid-template-columns:1fr}.calendar-grid{grid-template-columns:repeat(2,1fr)}main{margin:0;padding:20px}.logo{width:65px}.navbar{font-size:12px}}
 """
 
 
