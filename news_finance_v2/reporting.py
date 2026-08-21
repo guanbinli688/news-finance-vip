@@ -4,6 +4,8 @@ import html
 import re
 from datetime import date, timedelta
 
+from .sources import COMPANY_NAMES
+
 
 def esc(value) -> str:
     return html.escape(str(value or ""), quote=True)
@@ -152,7 +154,7 @@ def _source_cards(context, kind):
             if not _has_chinese(brief):
                 continue
             ticker = str(item.get("ticker") or "").strip().upper()
-            company = str(item.get("company") or "").strip()
+            company = COMPANY_NAMES.get(ticker) or str(item.get("company") or "").strip()
             if not _has_chinese(company):
                 company = COMPANY_LABELS.get(ticker) or COMPANY_LABELS.get(company.upper()) or "重点公司"
             title = f"{company}（{ticker}）" if ticker else company

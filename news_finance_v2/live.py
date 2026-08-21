@@ -16,7 +16,7 @@ from .config import Settings
 from .db import RadarRepository, make_cache_key
 from .market import SIGNALS
 from .sources import (
-    BASE_COMPANY_SOURCES, COMPANY_SYMBOLS, COMPANY_UNIVERSE,
+    BASE_COMPANY_SOURCES, COMPANY_NAMES, COMPANY_SYMBOLS, COMPANY_UNIVERSE,
     FULL_COMPANY_SOURCES, MEDIA_SOURCES, OFFICIAL_SOURCES,
 )
 from .verification import verify_absolute, verify_relative
@@ -290,6 +290,7 @@ class OpenAIAnalyzer:
         if company_sources:
             company_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
             company_prompt += "\n个股市场状态：\n" + json.dumps(collected.get("stock_snapshot", {}), ensure_ascii=False)
+            company_prompt += "\n股票代码与标准中文名：\n" + json.dumps(COMPANY_NAMES, ensure_ascii=False)
             company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
 \n从上述候选中筛选最多8个真正可交易的增量信号，输出：

@@ -80,3 +80,33 @@ EXPANDED_COMPANY_UNIVERSE = (
 )
 
 COMPANY_UNIVERSE = tuple(dict.fromkeys((*COMPANY_SYMBOLS.values(), *EXPANDED_COMPANY_UNIVERSE)))
+
+COMPANY_NAMES = {
+    "JPM": "摩根大通", "WMT": "沃尔玛", "MSFT": "微软", "AMZN": "亚马逊",
+    "NVDA": "英伟达", "GOOGL": "谷歌", "AAPL": "苹果", "COST": "开市客",
+    "XOM": "埃克森美孚", "TSM": "台积电", "BABA": "阿里巴巴",
+    "TCEHY": "腾讯控股", "AVGO": "博通", "MU": "美光科技", "TSLA": "特斯拉",
+    "LLY": "礼来", "UNH": "联合健康", "CAT": "卡特彼勒", "GS": "高盛", "V": "维萨",
+    "AMD": "超威半导体", "INTC": "英特尔", "ORCL": "甲骨文", "CRM": "赛富时",
+    "ADBE": "奥多比", "QCOM": "高通", "TXN": "德州仪器", "AMAT": "应用材料",
+    "LRCX": "泛林集团", "KLAC": "科磊", "MRVL": "迈威尔科技", "PLTR": "帕兰提尔",
+    "NOW": "赛维斯诺", "IBM": "国际商业机器", "CSCO": "思科", "PANW": "派拓网络",
+    "CRWD": "克劳德斯特莱克", "SNOW": "雪花公司", "ARM": "安谋", "ASML": "阿斯麦",
+    "META": "Meta平台", "HD": "家得宝", "LOW": "劳氏", "TGT": "塔吉特",
+    "NKE": "耐克", "SBUX": "星巴克", "MCD": "麦当劳", "BKNG": "Booking控股",
+    "DIS": "迪士尼", "NFLX": "奈飞", "ABNB": "爱彼迎", "ROST": "罗斯百货",
+    "TJX": "TJX公司", "PDD": "拼多多", "JD": "京东", "BIDU": "百度", "SONY": "索尼",
+    "BAC": "美国银行", "C": "花旗集团", "WFC": "富国银行", "MS": "摩根士丹利",
+    "BLK": "贝莱德", "SCHW": "嘉信理财", "AXP": "美国运通", "COF": "第一资本",
+    "PYPL": "贝宝", "JNJ": "强生", "PFE": "辉瑞", "MRK": "默沙东",
+    "ABBV": "艾伯维", "AMGN": "安进", "GILD": "吉利德科学", "TMO": "赛默飞世尔",
+    "DHR": "丹纳赫", "ISRG": "直觉外科", "CVS": "CVS健康", "NVO": "诺和诺德",
+    "BA": "波音", "GE": "GE航空航天", "RTX": "雷神技术", "LMT": "洛克希德·马丁",
+    "DE": "迪尔", "UPS": "联合包裹", "FDX": "联邦快递", "HON": "霍尼韦尔",
+    "UNP": "联合太平洋", "CVX": "雪佛龙", "COP": "康菲石油", "SLB": "斯伦贝谢",
+    "OXY": "西方石油", "EOG": "EOG资源", "FCX": "自由港麦克莫兰", "NEM": "纽蒙特",
+    "TMUS": "美国T-Mobile", "VZ": "威瑞森", "T": "美国电话电报",
+    "CMCSA": "康卡斯特", "PG": "宝洁", "KO": "可口可乐", "PEP": "百事",
+    "PM": "菲利普莫里斯国际", "MO": "奥驰亚", "CL": "高露洁", "MDLZ": "亿滋国际",
+    "NEE": "新纪元能源", "DUK": "杜克能源", "SO": "南方电力", "AMT": "美国电塔",
+}

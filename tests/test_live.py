@@ -6,7 +6,7 @@ from news_finance_v2.config import Settings
 from news_finance_v2.live import (
     HttpCollector, OpenAIAnalyzer, SMTPMailer, parse_ics_events, rank_news_symbols,
 )
-from news_finance_v2.sources import COMPANY_UNIVERSE
+from news_finance_v2.sources import COMPANY_NAMES, COMPANY_UNIVERSE
 
 
 class Response:
@@ -69,6 +69,12 @@ def test_news_prefilter_uses_each_stocks_own_volatility():
     }
 
     assert rank_news_symbols(snapshot, limit=2) == ("A", "B")
+
+
+def test_expanded_universe_has_one_canonical_chinese_name_per_symbol():
+    assert set(COMPANY_NAMES) == set(COMPANY_UNIVERSE)
+    assert COMPANY_NAMES["MRVL"] == "迈威尔科技"
+    assert COMPANY_NAMES["MU"] == "美光科技"
 
 
 def test_ics_events_are_limited_to_forward_window():
