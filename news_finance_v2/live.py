@@ -278,7 +278,7 @@ class OpenAIAnalyzer:
             company_prompt += """
 \n从上述候选中筛选最多6个真正可交易的增量信号，输出：
 {"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
-硬约束：只输出JSON；除ticker和source外全部使用简体中文；最多3只标记“关注”，其余只能“等待/回避”；“关注”必须同时具备可验证的正向增量事实、可接受的趋势/回撤和清晰触发条件，不能只凭网站介绍或单条媒体标题；优先质量与行业分散，不为凑数量而入选；逐股比较当日跌幅与该股20日波动率，不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
+硬约束：只输出JSON；除ticker和source外全部使用简体中文；当前执行模式只买受控回撤，最多3只标记“关注”，其余只能“等待/回避”；“关注”必须同时具备可验证的正向增量事实、当日下跌达到该股20日波动率的0.5倍、且没有明显利空导致逻辑失效；上涨股即使趋势强也只能“等待”；跌幅达到自身波动率但由明确利空驱动的应“回避”；触发条件优先写止跌确认，不写追涨；不能只凭网站介绍或单条媒体标题；优先质量与行业分散，不为凑数量而入选；不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；无法形成方向就写“等待”，不能编造买卖价格。
 """
             company_system = "你是中文美股研究负责人。把公司公告压缩为可执行的股票观察结论，只输出JSON。"
             company_result = self._complete_json("company", company_system, company_prompt)
@@ -309,8 +309,16 @@ class OpenAIAnalyzer:
             stance = str(item.get("stance", "等待")).strip()
             if stance not in {"关注", "等待", "回避"}:
                 stance = "等待"
-            if stance == "关注" and (focus_count >= 3 or ticker not in stock_snapshot):
-                stance = "等待"
+            snapshot = stock_snapshot.get(ticker, {})
+            if stance == "关注":
+                try:
+                    day_change = float(snapshot["day_change_pct"])
+                    volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
+                    controlled_pullback = day_change <= -0.5 * volatility
+                except (KeyError, TypeError, ValueError):
+                    controlled_pullback = False
+                if focus_count >= 3 or not controlled_pullback:
+                    stance = "等待"
             if stance == "关注":
                 focus_count += 1
             item["ticker"] = ticker

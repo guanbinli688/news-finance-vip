@@ -144,13 +144,25 @@ def test_company_signal_guard_caps_focus_and_rejects_unknown_tickers():
         {"ticker": ticker, "stance": "关注", "brief": "中文结论"}
         for ticker in ("NVDA", "MSFT", "JPM", "XOM", "FAKE")
     ]
-    snapshot = {ticker: {"price": 100} for ticker in ("NVDA", "MSFT", "JPM", "XOM")}
+    snapshot = {
+        ticker: {"price": 100, "day_change_pct": -2, "volatility_20_pct": 2}
+        for ticker in ("NVDA", "MSFT", "JPM", "XOM")
+    }
 
     selected = OpenAIAnalyzer._limit_company_signals(signals, snapshot)
 
     assert len(selected) == 4
     assert sum(item["stance"] == "关注" for item in selected) == 3
     assert selected[-1]["stance"] == "等待"
+
+
+def test_company_signal_guard_requires_stock_specific_pullback():
+    signals = [{"ticker": "MSFT", "stance": "关注", "brief": "中文结论"}]
+    snapshot = {"MSFT": {"price": 100, "day_change_pct": -0.4, "volatility_20_pct": 2}}
+
+    selected = OpenAIAnalyzer._limit_company_signals(signals, snapshot)
+
+    assert selected[0]["stance"] == "等待"
 
 
 def test_mailer_uses_dated_url_and_authenticated_sender(tmp_path, monkeypatch):
