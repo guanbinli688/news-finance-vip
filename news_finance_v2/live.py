@@ -391,9 +391,13 @@ class SMTPMailer:
                 f"{self.settings.public_report_url.rstrip('/')}"
                 f"/{self.settings.report_date.strftime('%m%d')}"
             )
+            dated_label = (
+                f"{self.settings.report_date.month}月"
+                f"{self.settings.report_date.day}日最新版"
+            )
             link = (
                 "<div style='padding:12px;background:#eaf4fb;border-left:5px solid #005ea8'>"
-                f"公网最新版：<a href='{dated_url}'>{dated_url}</a></div>"
+                f"<a href='{dated_url}'>{dated_label}</a></div>"
             )
             report = report.replace("<body>", "<body>" + link, 1)
         message = MIMEText(report, "html", "utf-8")

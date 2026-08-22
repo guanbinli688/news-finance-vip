@@ -217,3 +217,5 @@ def test_mailer_uses_dated_url_and_authenticated_sender(tmp_path, monkeypatch):
     assert message["From"] == "original-sender@example.test"
     assert message["To"] == "original-recipient@example.test"
     assert "https://example.test/reports/0821" in body
+    assert ">8月21日最新版</a>" in body
+    assert "公网最新版：" not in body
