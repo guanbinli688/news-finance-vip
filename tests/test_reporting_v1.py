@@ -50,8 +50,32 @@ def test_report_keeps_v2_layout_with_chinese_labels_and_seven_sections():
     assert 'class="ticker-track"' in report
     assert 'aria-label="美国鹰正式徽标"' in report
     assert "--seal-image:url(data:image/png;base64," in report
-    assert 'class="wrap footer-visual"' in report
+    assert 'class="wrap footer-main"' in report
+    assert 'class="wrap footer-scope"' in report
+    assert 'class="wrap footer-visual"' not in report
     assert 'id="direction"' in report and 'href="#forecast"' in report
+    ticker_html = report.split('class="ticker-track"', 1)[1].split("</div>", 1)[0]
+    assert not any("\u4e00" <= character <= "\u9fff" for character in ticker_html)
+
+
+def test_report_uses_distinct_signal_and_prediction_colors():
+    context = rich_context()
+    context["company_signals"] += [
+        {"company": "苹果", "ticker": "AAPL", "stance": "等待", "brief": "等待趋势与订单信息进一步确认。", "trigger": "重新站稳均线", "risk": "需求减弱"},
+        {"company": "沃尔玛", "ticker": "WMT", "stance": "回避", "brief": "盈利预期承压，暂不承担额外风险。", "trigger": "盈利预期修复", "risk": "估值继续下修"},
+    ]
+    context["display_predictions"].append(
+        {"horizon_days": 5, "target": "VIX", "direction": "NEUTRAL", "probability": .55, "thesis": "区间波动", "invalidation": "突破区间"}
+    )
+
+    report = render_report(context)
+
+    assert "source-card signal-focus" in report
+    assert "source-card signal-wait" in report
+    assert "source-card signal-avoid" in report
+    assert "direction-pill direction-up" in report
+    assert "direction-pill direction-neutral" in report
+    assert "direction-pill direction-down" in report
 
 
 def test_report_renders_each_source_as_its_own_correct_link():
