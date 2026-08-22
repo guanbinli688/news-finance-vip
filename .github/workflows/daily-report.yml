@@ -3,7 +3,7 @@ name: Daily investment report
 on:
   workflow_dispatch:
   schedule:
-    - cron: "30 7 * * *"
+    - cron: "10 9 * * *"
       timezone: "America/New_York"
 
 concurrency:
