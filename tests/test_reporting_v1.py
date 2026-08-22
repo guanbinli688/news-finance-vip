@@ -47,6 +47,11 @@ def test_report_keeps_v2_layout_with_chinese_labels_and_seven_sections():
     assert "市场等待政策确认" in report
     assert 'class="kicker"' not in report
     assert report.count("class='day'") == 14
+    assert 'class="ticker-track"' in report
+    assert 'aria-label="美国鹰正式徽标"' in report
+    assert "--seal-image:url(data:image/png;base64," in report
+    assert 'class="wrap footer-visual"' in report
+    assert 'id="direction"' in report and 'href="#forecast"' in report
 
 
 def test_report_renders_each_source_as_its_own_correct_link():
