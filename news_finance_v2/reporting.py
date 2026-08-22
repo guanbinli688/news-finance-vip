@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import html
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from .sources import COMPANY_NAMES, COMPANY_SYMBOLS
@@ -319,10 +320,11 @@ def render_report(context: dict) -> str:
     audit_class = "audit-ok" if gate.allowed else "audit-warn"
     audit_title = "核心官方来源本轮读取正常" if gate.allowed else "数据存在缺口，本轮不冻结预测"
     report_date = str(context.get("report_date") or date.today().isoformat())[:10]
+    report_time = datetime.now(ZoneInfo("America/Denver")).strftime("%H:%M")
     seal_data_uri = _seal_data_uri()
     ticker = (
         "DOWNLOAD THE DAILY MARKET BRIEF · REAL-TIME POLICY WATCH · GLOBAL MACRO SIGNALS · "
-        f"CAPITAL FLOW · SECTOR ROTATION · EQUITY ACTIONS · REPORT {report_date} →"
+        f"CAPITAL FLOW · SECTOR ROTATION · EQUITY ACTIONS · REPORT {report_date} {report_time} MT →"
     )
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEWS FINANCE | Global Market Intelligence</title><style>{CSS}</style></head><body style="--seal-image:url({seal_data_uri})">
 <div class="ticker-bar" aria-label="市场研究栏目"><div class="ticker-track"><span><b>●</b> {esc(ticker)}</span><span aria-hidden="true"><b>●</b> {esc(ticker)}</span></div></div>
