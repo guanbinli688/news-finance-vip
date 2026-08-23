@@ -15,10 +15,23 @@ from bs4 import BeautifulSoup
 from .config import Settings
 from .db import RadarRepository, make_cache_key
 from .market import SIGNALS
+from . import sources as source_config
 from .sources import (
     BASE_COMPANY_SOURCES, COMPANY_NAMES, COMPANY_SYMBOLS, COMPANY_UNIVERSE,
     FULL_COMPANY_SOURCES, MEDIA_SOURCES, OFFICIAL_SOURCES,
 )
+
+# 新版 sources.py 可提供这些增强配置；旧版没有时也能直接运行。
+COMPANY_SECTORS = getattr(source_config, "COMPANY_SECTORS", {})
+CORE_COMPANY_UNIVERSE = set(getattr(source_config, "CORE_COMPANY_UNIVERSE", ()))
+SCREENING_CONFIG = {
+    "market_prefilter_size": 50,
+    "news_prefilter_size": 28,
+    "ai_candidate_size": 16,
+    "final_company_count": 8,
+    "max_per_sector": 2,
+}
+SCREENING_CONFIG.update(getattr(source_config, "SCREENING_CONFIG", {}))
 from .verification import verify_absolute, verify_relative
 
 
@@ -62,37 +75,83 @@ def _default_market_loader(symbols):
 
 
 def _default_stock_loader(symbols):
+    """批量读取股票行情，并生成第一轮筛选需要的量价/趋势特征。"""
     import yfinance as yf
+
+    symbols = tuple(dict.fromkeys(str(symbol).upper() for symbol in symbols if symbol))
+    if not symbols:
+        return {}
+
     frame = yf.download(
-        list(symbols), period="3mo", auto_adjust=True, progress=False,
-        threads=True, group_by="ticker",
+        list(symbols),
+        period="6mo",
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+        group_by="ticker",
     )
     result = {}
     if frame is None or frame.empty:
         return result
+
     for symbol in symbols:
         try:
             data = frame[symbol] if hasattr(frame.columns, "levels") else frame
             close = data["Close"].dropna()
             if len(close) < 22:
                 continue
+
+            volume = data["Volume"].dropna() if "Volume" in data else None
             returns = close.pct_change().dropna().tail(20)
+
             latest = float(close.iloc[-1])
             previous = float(close.iloc[-2])
-            recent = close.tail(20)
-            ma20 = float(recent.mean())
-            ma50 = float(close.tail(50).mean())
+            close_5d = float(close.iloc[-6]) if len(close) >= 6 else previous
+            close_20d = float(close.iloc[-21])
+
+            recent20 = close.tail(20)
+            recent60 = close.tail(60)
+
+            ma20 = float(recent20.mean())
+            ma50 = float(close.tail(50).mean()) if len(close) >= 50 else ma20
+
+            low20 = float(recent20.min())
+            high20 = float(recent20.max())
+            low60 = float(recent60.min())
+            high60 = float(recent60.max())
+
+            position20 = 0.5 if high20 <= low20 else (latest - low20) / (high20 - low20)
+            position60 = 0.5 if high60 <= low60 else (latest - low60) / (high60 - low60)
+
+            volume_ratio = 1.0
+            if volume is not None and len(volume) >= 2:
+                latest_volume = float(volume.iloc[-1])
+                base_volume = volume.iloc[-21:-1] if len(volume) >= 21 else volume.iloc[:-1]
+                avg_volume = float(base_volume.mean()) if len(base_volume) else 0.0
+                if avg_volume > 0:
+                    volume_ratio = latest_volume / avg_volume
+
+            volatility = max(float(returns.std()) * 100, 0.01)
+
             result[symbol] = {
                 "price": round(latest, 4),
                 "day_change_pct": round((latest / previous - 1) * 100, 3),
-                "month_change_pct": round((latest / float(close.iloc[-21]) - 1) * 100, 3),
-                "volatility_20_pct": round(float(returns.std()) * 100, 3),
-                "drawdown_20_pct": round((latest / float(recent.max()) - 1) * 100, 3),
+                "change_5d_pct": round((latest / close_5d - 1) * 100, 3),
+                "month_change_pct": round((latest / close_20d - 1) * 100, 3),
+                "volatility_20_pct": round(volatility, 3),
+                "drawdown_20_pct": round((latest / high20 - 1) * 100, 3),
+                "drawdown_60_pct": round((latest / high60 - 1) * 100, 3),
+                "volume_ratio_20": round(volume_ratio, 3),
                 "above_ma20": latest >= ma20,
                 "above_ma50": latest >= ma50,
+                "ma20_gap_pct": round((latest / ma20 - 1) * 100, 3) if ma20 else 0.0,
+                "ma50_gap_pct": round((latest / ma50 - 1) * 100, 3) if ma50 else 0.0,
+                "position_20d": round(max(0.0, min(position20, 1.0)), 3),
+                "position_60d": round(max(0.0, min(position60, 1.0)), 3),
             }
-        except (KeyError, TypeError, ValueError, IndexError):
+        except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
             continue
+
     return result
 
 
@@ -102,25 +161,233 @@ def _rss_text(source: str) -> str:
     except ElementTree.ParseError:
         return ""
     titles = []
-    for item in root.findall(".//item")[:8]:
+    for item in root.findall(".//item")[:10]:
         title = " ".join((item.findtext("title") or "").split())
         published = " ".join((item.findtext("pubDate") or "").split())
         if title:
             titles.append(f"{published}｜{title}" if published else title)
-    return "\n".join(titles)[:8000]
+    return "\n".join(titles)[:9000]
+
+
+def _stock_screen_score(symbol: str, snapshot: dict) -> tuple[float, list[str]]:
+    """
+    第一轮只看量价/趋势，不让 AI 在整个股票池里盲选。
+
+    目标不是预测涨跌，而是找出“今天值得进一步搜新闻”的异常股票。
+    同时关注上涨、下跌、放量、趋势和突破/超跌，避免旧版只偏向大跌股。
+    """
+    try:
+        day_change = float(snapshot.get("day_change_pct", 0.0))
+        change_5d = float(snapshot.get("change_5d_pct", 0.0))
+        month_change = float(snapshot.get("month_change_pct", 0.0))
+        volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.25)
+        volume_ratio = max(float(snapshot.get("volume_ratio_20", 1.0)), 0.0)
+        position20 = float(snapshot.get("position_20d", 0.5))
+        ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
+    except (TypeError, ValueError):
+        return 0.0, []
+
+    score = 0.0
+    reasons = []
+
+    # 1) 当日异常波动：使用绝对值，因此上涨/下跌都能入选。
+    standardized_move = abs(day_change) / volatility
+    score += min(standardized_move, 3.0) * 15.0
+    if standardized_move >= 0.75:
+        reasons.append("当日波动显著")
+
+    # 2) 放量通常意味着事件正在被市场交易。
+    if volume_ratio > 1.0:
+        score += min(volume_ratio - 1.0, 2.0) * 12.0
+    if volume_ratio >= 1.5:
+        reasons.append("成交量放大")
+
+    # 3) 5日和20日趋势，避免只盯单日噪声。
+    score += min(abs(change_5d) / max(volatility * 2.2, 1.0), 2.5) * 7.0
+    score += min(abs(month_change) / max(volatility * 4.0, 2.0), 2.0) * 5.0
+    if abs(change_5d) >= max(4.0, volatility * 2.0):
+        reasons.append("5日趋势突出")
+
+    # 4) 靠近20日极值时给少量加分，用于发现突破/超跌。
+    if position20 >= 0.90:
+        score += 7.0
+        reasons.append("接近20日高位")
+    elif position20 <= 0.10:
+        score += 7.0
+        reasons.append("接近20日低位")
+
+    # 5) 均线偏离过大说明处于强趋势或风险释放期，但权重不能过高。
+    score += min(abs(ma20_gap) / 8.0, 1.5) * 4.0
+
+    # 核心公司只给非常轻的基础权重，避免大公司垄断候选名单。
+    if symbol in CORE_COMPANY_UNIVERSE:
+        score += 1.5
+
+    return round(score, 3), reasons[:4]
+
+
+def _sector_of(symbol: str) -> str:
+    return str(COMPANY_SECTORS.get(symbol, "other"))
+
+
+def _select_diverse_symbols(ranked, limit: int, *, max_per_sector: int | None = None):
+    """按分数取前列，同时限制单一行业过度占位。"""
+    if limit <= 0:
+        return []
+
+    max_per_sector = max_per_sector or max(4, limit // 6)
+    selected = []
+    selected_set = set()
+    sector_counts = {}
+
+    # 第一轮应用行业上限。
+    for score, symbol in ranked:
+        sector = _sector_of(symbol)
+        if sector != "other" and sector_counts.get(sector, 0) >= max_per_sector:
+            continue
+        selected.append((score, symbol))
+        selected_set.add(symbol)
+        if sector != "other":
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        if len(selected) >= limit:
+            return selected
+
+    # 如果行业上限导致数量不足，再按总分补齐。
+    for score, symbol in ranked:
+        if symbol in selected_set:
+            continue
+        selected.append((score, symbol))
+        selected_set.add(symbol)
+        if len(selected) >= limit:
+            break
+
+    return selected
 
 
 def rank_news_symbols(stock_snapshot, limit=50):
+    """
+    从完整股票池筛出需要抓逐股新闻的候选。
+
+    旧版按 change / volatility 从小到大排序，会系统性偏向大跌股。
+    新版改为“异常程度 + 放量 + 多周期趋势 + 行业分散”。
+    """
     ranked = []
     for symbol, snapshot in stock_snapshot.items():
-        try:
-            change = float(snapshot["day_change_pct"])
-            volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
-        except (KeyError, TypeError, ValueError):
+        if not isinstance(snapshot, dict):
             continue
-        ranked.append((change / volatility, change, symbol))
-    ranked.sort()
-    return tuple(symbol for _, _, symbol in ranked[:limit])
+        score, reasons = _stock_screen_score(symbol, snapshot)
+        snapshot["screen_score"] = score
+        snapshot["screen_reasons"] = reasons
+        ranked.append((score, symbol))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    diversified = _select_diverse_symbols(ranked, int(limit))
+    return tuple(symbol for _, symbol in diversified)
+
+
+_EVENT_KEYWORDS = (
+    # 财报 / 指引
+    "earnings", "revenue", "eps", "guidance", "forecast", "outlook",
+    "quarter", "results", "profit", "margin",
+    # 资本动作
+    "buyback", "repurchase", "dividend", "offering", "debt", "acquisition",
+    "acquire", "merger", "spin-off", "spinoff",
+    # 监管 / 诉讼 / 医药
+    "sec", "fda", "doj", "ftc", "lawsuit", "settlement", "approval",
+    "trial", "investigation", "antitrust",
+    # 公司经营与重大事件
+    "contract", "partnership", "launch", "orders", "layoffs", "ceo", "cfo",
+    "recall", "cyber", "breach", "tariff", "export", "sanction",
+    # 市场评价
+    "upgrade", "downgrade", "price target", "initiates", "rating",
+)
+
+
+def _news_event_score(text: str) -> float:
+    """用标题中的重大事件词给第二轮新闻筛选加权，不替代 AI 语义判断。"""
+    lowered = (text or "").lower()
+    if not lowered:
+        return 0.0
+
+    hits = 0
+    for keyword in _EVENT_KEYWORDS:
+        # 单词使用边界匹配，避免 "sec" 命中 "second" 之类的误判。
+        if re.fullmatch(r"[a-z0-9]+", keyword):
+            matched = re.search(rf"\\b{re.escape(keyword)}\\b", lowered) is not None
+        else:
+            matched = keyword in lowered
+        hits += int(matched)
+
+    headline_count = min(len([line for line in text.splitlines() if line.strip()]), 10)
+    return min(hits * 2.5 + headline_count * 0.6, 24.0)
+
+
+def _choose_ai_company_candidates(compact_sources, collected):
+    """
+    第二轮：在已抓新闻的股票中，根据市场异常 + 新闻事件密度再次缩小范围。
+
+    返回：
+      news_prefilter_symbols: 新闻二筛后的约28只
+      ai_symbols: 真正送给 AI 深度比较的约16只
+    """
+    screened = [
+        str(symbol).upper()
+        for symbol in collected.get("screened_symbols", [])
+        if str(symbol).upper() in collected.get("stock_snapshot", {})
+    ]
+    if not screened:
+        return [], []
+
+    news_by_symbol = {}
+    ir_by_symbol = {}
+    for item in compact_sources:
+        if item.get("status") != "SUCCESS" or not item.get("text"):
+            continue
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        if item.get("kind") == "company_news":
+            news_by_symbol.setdefault(symbol, []).append(item)
+        elif item.get("kind") == "company":
+            ir_by_symbol.setdefault(symbol, []).append(item)
+
+    stock_snapshot = collected.get("stock_snapshot", {})
+    ranked = []
+    for symbol in screened:
+        snapshot = stock_snapshot.get(symbol, {})
+        market_score = float(snapshot.get("screen_score", 0.0) or 0.0)
+        news_text = "\n".join(item.get("text", "") for item in news_by_symbol.get(symbol, []))
+        ir_text = "\n".join(item.get("text", "") for item in ir_by_symbol.get(symbol, []))
+
+        event_score = _news_event_score(news_text)
+        # IR只给很小加成，避免固定IR公司长期霸榜。
+        ir_bonus = min(_news_event_score(ir_text) * 0.20, 3.0)
+        source_bonus = 2.0 if news_by_symbol.get(symbol) else 0.0
+
+        total = market_score + event_score + ir_bonus + source_bonus
+        ranked.append((round(total, 3), symbol))
+
+        snapshot["news_event_score"] = round(event_score, 3)
+        snapshot["candidate_score"] = round(total, 3)
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+
+    news_limit = min(int(SCREENING_CONFIG.get("news_prefilter_size", 28)), len(ranked))
+    # 新闻二筛允许每行业多一些，避免过早丢掉真正的行业主线。
+    news_ranked = _select_diverse_symbols(
+        ranked,
+        news_limit,
+        max_per_sector=max(4, news_limit // 5),
+    )
+
+    ai_limit = min(int(SCREENING_CONFIG.get("ai_candidate_size", 16)), len(news_ranked))
+    ai_ranked = _select_diverse_symbols(
+        news_ranked,
+        ai_limit,
+        max_per_sector=max(3, ai_limit // 5),
+    )
+
+    return [symbol for _, symbol in news_ranked], [symbol for _, symbol in ai_ranked]
 
 
 class HttpCollector:
@@ -150,7 +417,11 @@ class HttpCollector:
                 records = list(executor.map(lambda spec: self._fetch(*spec), specs))
         market = self.market_loader(list(SIGNALS))
         stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
-        news_symbols = rank_news_symbols(stock_snapshot) if full else ()
+        news_limit = min(
+            int(SCREENING_CONFIG.get("market_prefilter_size", 60)),
+            len(stock_snapshot),
+        )
+        news_symbols = rank_news_symbols(stock_snapshot, limit=news_limit) if full else ()
         if full:
             news_specs = [
                 (f"{symbol} 新闻", f"https://finance.yahoo.com/rss/2.0/headline?s={symbol}", symbol)
@@ -176,6 +447,14 @@ class HttpCollector:
             "stock_snapshot": stock_snapshot,
             "universe_size": len(COMPANY_UNIVERSE),
             "screened_symbols": list(news_symbols),
+            "screening_summary": {
+                "universe": len(COMPANY_UNIVERSE),
+                "market_data": len(stock_snapshot),
+                "market_prefilter": len(news_symbols),
+                "news_prefilter_target": int(SCREENING_CONFIG.get("news_prefilter_size", 28)),
+                "ai_candidate_target": int(SCREENING_CONFIG.get("ai_candidate_size", 16)),
+                "final_target": int(SCREENING_CONFIG.get("final_company_count", 8)),
+            },
         }
 
     def _fetch(self, name, url, kind, core):
@@ -297,26 +576,72 @@ class OpenAIAnalyzer:
         if isinstance(cross_asset_predictions, list) and cross_asset_predictions:
             parsed["predictions"] = self._limit_predictions(cross_asset_predictions)
 
+        # 公司部分采用三层漏斗：
+        # 完整股票池 -> 行情预筛 -> 新闻二筛 -> AI候选 -> 最终8只。
+        news_prefilter_symbols, ai_symbols = _choose_ai_company_candidates(
+            compact_sources, collected
+        )
+        ai_symbol_set = set(ai_symbols)
+
         company_sources = [
             item for item in compact_sources
             if item.get("kind") in {"company", "company_news"}
-            and item.get("status") == "SUCCESS" and item.get("text")
+            and item.get("status") == "SUCCESS"
+            and item.get("text")
+            and str(item.get("symbol") or "").upper() in ai_symbol_set
         ]
-        if company_sources:
+
+        stock_snapshot = collected.get("stock_snapshot", {})
+        candidate_snapshot = {
+            symbol: stock_snapshot.get(symbol, {})
+            for symbol in ai_symbols
+            if symbol in stock_snapshot
+        }
+        candidate_names = {
+            symbol: COMPANY_NAMES.get(symbol, symbol)
+            for symbol in ai_symbols
+        }
+
+        # 便于HTML或审计模块以后展示“池子有多大、最后怎么筛出来的”。
+        collected["news_prefilter_symbols"] = news_prefilter_symbols
+        collected["ai_candidate_symbols"] = ai_symbols
+
+        if company_sources and ai_symbols:
             company_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
-            company_prompt += "\n个股市场状态：\n" + json.dumps(collected.get("stock_snapshot", {}), ensure_ascii=False)
-            company_prompt += "\n股票代码与标准中文名：\n" + json.dumps(COMPANY_NAMES, ensure_ascii=False)
-            company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
+            company_prompt += "\n今日二次筛选后的候选代码（只能从这里选）：\n" + json.dumps(ai_symbols, ensure_ascii=False)
+            company_prompt += "\n候选个股市场状态与筛选分数：\n" + json.dumps(candidate_snapshot, ensure_ascii=False)
+            company_prompt += "\n候选股票代码与标准中文名：\n" + json.dumps(candidate_names, ensure_ascii=False)
+            company_prompt += "\n候选公司的官方材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
-\n从上述候选中筛选最多8个真正可交易的增量信号，输出：
+\n从上述候选中按“增量信息强度 + 价格反应 + 风险收益比 + 行业分散”排序，
+输出最多12个候选，系统随后会再压缩到最终8个。JSON格式：
 {"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
-硬约束：只输出JSON；除ticker和source外全部使用简体中文；当前为模拟盘弹性执行，最多4只标记“关注”，其余只能“等待/回避”；“关注”应同时具备可验证的正向逻辑、当日下跌达到该股20日波动率的0.25倍、且没有明显利空导致逻辑失效；若样本中有合格对象，应优先给出2-4只行业分散的“关注”，不要因轻微信息不完美全部写成等待；跌幅达到自身波动率但由明确重大利空驱动的应“回避”；触发条件优先写止跌确认，不写追涨；不能只凭网站介绍或单条媒体标题；不为凑数量而牺牲基本逻辑；不能用统一百分比判断所有股票；不要翻译或复述整段网页；不要使用导航词、公司自我介绍和宣传语；每家公司结论必须不同；brief不超过55字，trigger和risk各不超过35字；不能编造买卖价格。
+
+硬约束：
+1. 只输出JSON；ticker只能来自“今日二次筛选后的候选代码”，禁止从记忆补充其他股票。
+2. 除ticker和source外全部使用简体中文。
+3. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息的股票。
+4. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
+5. “关注”最多5只，必须具备可验证的正向逻辑，并满足以下至少一种：
+   A. 上升趋势中的可控回撤/止跌；
+   B. 放量突破或趋势重新转强，但触发条件必须防止追高。
+6. 明确重大利空导致下跌、且核心逻辑受损的，应优先“回避”，不能机械当作抄底机会。
+7. “等待”用于方向尚可但价格、成交量或事件确认不足的股票。
+8. 不能只凭网站介绍或单条媒体标题；公司官网页面若只有宣传性内容，不得作为主要论据。
+9. 每家公司结论必须不同，brief不超过55字，trigger和risk各不超过35字。
+10. 不编造买卖价格，不承诺收益，不为了凑数量牺牲证据质量。
 """
-            company_system = "你是中文美股研究负责人。把公司公告压缩为可执行的股票观察结论，只输出JSON。"
+            company_system = (
+                "你是中文美股研究负责人。你面对的是已经通过量价和新闻初筛的候选池。"
+                "你的任务是做最后一轮精挑细选，而不是偏爱熟悉的大公司。"
+                "只依据输入证据，严格输出JSON。"
+            )
             company_result = self._complete_json("company", company_system, company_prompt)
             signals = company_result.get("company_signals", [])
             parsed["company_signals"] = self._limit_company_signals(
-                signals, collected.get("stock_snapshot", {})
+                signals,
+                stock_snapshot,
+                allowed_tickers=ai_symbol_set,
             )
         else:
             parsed["company_signals"] = []
@@ -345,42 +670,88 @@ class OpenAIAnalyzer:
         return selected
 
     @staticmethod
-    def _limit_company_signals(signals, stock_snapshot):
+    def _limit_company_signals(signals, stock_snapshot, allowed_tickers=None):
         if not isinstance(signals, list):
             return []
+
         allowed = set(COMPANY_UNIVERSE)
+        if allowed_tickers is not None:
+            allowed &= {str(symbol).upper() for symbol in allowed_tickers}
+
         selected = []
         seen = set()
         focus_count = 0
+        sector_counts = {}
+
+        final_limit = int(SCREENING_CONFIG.get("final_company_count", 8))
+        max_per_sector = int(SCREENING_CONFIG.get("max_per_sector", 2))
+
         for raw in signals:
             if not isinstance(raw, dict):
                 continue
+
             item = dict(raw)
             ticker = str(item.get("ticker", "")).strip().upper()
             if ticker not in allowed or ticker in seen:
                 continue
-            seen.add(ticker)
+
+            sector = _sector_of(ticker)
+            if sector != "other" and sector_counts.get(sector, 0) >= max_per_sector:
+                continue
+
             stance = str(item.get("stance", "等待")).strip()
             if stance not in {"关注", "等待", "回避"}:
                 stance = "等待"
+
             snapshot = stock_snapshot.get(ticker, {})
+
+            # “关注”不再只允许下跌股：
+            # A. 强趋势中的可控回撤；或
+            # B. 放量、站上关键均线的确认型突破。
             if stance == "关注":
                 try:
-                    day_change = float(snapshot["day_change_pct"])
-                    volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
-                    controlled_pullback = day_change <= -0.25 * volatility
-                except (KeyError, TypeError, ValueError):
-                    controlled_pullback = False
-                if focus_count >= 4 or not controlled_pullback:
+                    day_change = float(snapshot.get("day_change_pct", 0.0))
+                    volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.1)
+                    volume_ratio = float(snapshot.get("volume_ratio_20", 1.0))
+                    above_ma20 = bool(snapshot.get("above_ma20", False))
+                    above_ma50 = bool(snapshot.get("above_ma50", False))
+                    ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
+
+                    controlled_pullback = (
+                        day_change <= -0.25 * volatility
+                        and day_change >= -2.25 * volatility
+                        and (above_ma20 or above_ma50)
+                    )
+                    confirmed_breakout = (
+                        day_change >= 0.35 * volatility
+                        and volume_ratio >= 1.30
+                        and above_ma20
+                        and above_ma50
+                        and ma20_gap <= 10.0
+                    )
+                    actionable = controlled_pullback or confirmed_breakout
+                except (TypeError, ValueError):
+                    actionable = False
+
+                if focus_count >= 5 or not actionable:
                     stance = "等待"
+
             if stance == "关注":
                 focus_count += 1
+
+            seen.add(ticker)
+            if sector != "other":
+                sector_counts[sector] = sector_counts.get(sector, 0) + 1
             item["ticker"] = ticker
+            item["company"] = COMPANY_NAMES.get(ticker, item.get("company") or ticker)
             item["stance"] = stance
             selected.append(item)
-            if len(selected) == 8:
+
+            if len(selected) >= final_limit:
                 break
+
         return selected
+
 
 
 class SMTPMailer:
