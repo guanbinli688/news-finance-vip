@@ -6,7 +6,7 @@ Path
 
 from .sources import COMPANY_NAMES, COMPANY_SYMBOLS
 
-def esc(value) -> str: return html.escape(str(value or ““), quote=True)
+def esc(value) -> str: return html.escape(str(value or ""), quote=True)
 
 BLS_EVENT_TRANSLATIONS = { “Summer Youth Labor Force”: “暑期青年劳动力”,
 “State Employment and Unemployment (Monthly)”: “各州就业与失业（月度）”,
