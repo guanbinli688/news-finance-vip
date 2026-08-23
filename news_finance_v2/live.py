@@ -910,7 +910,7 @@ class OpenAIAnalyzer:
             item for item in compact_sources
             if item.get("kind") in {"official", "media"}
         ]
-        prompt = "市场最新价格：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
@@ -934,7 +934,7 @@ class OpenAIAnalyzer:
         system_prompt = "你是成熟、克制且措辞温和的中文跨资产投资研究员。只依据输入证据，先给动作再解释原因，不承诺收益。严格输出JSON。"
         parsed = self._complete_json("master", system_prompt, prompt)
 
-        prediction_prompt = "市场最新价格：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prediction_prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prediction_prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
