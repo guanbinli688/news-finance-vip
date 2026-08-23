@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 from .config import Settings
 from .db import RadarRepository, make_cache_key
-from .market import SIGNALS
+from .market import SIGNALS, PREDICTION_TARGETS, PREDICTION_GROUPS, SIGNAL_NAMES
 from . import sources as source_config
 from .sources import (
     BASE_COMPANY_SOURCES, COMPANY_NAMES, COMPANY_SYMBOLS, COMPANY_UNIVERSE,
@@ -540,6 +540,7 @@ class OpenAIAnalyzer:
             if item.get("kind") in {"official", "media"}
         ]
         prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
         prompt += """
 \n请生成中文机构晨报所需的完整 JSON：
@@ -562,11 +563,27 @@ class OpenAIAnalyzer:
         parsed = self._complete_json("master", system_prompt, prompt)
 
         prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prediction_prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
+        prediction_prompt += "\n允许预测的完整对象：\n" + json.dumps(PREDICTION_TARGETS, ensure_ascii=False)
+        prediction_prompt += "\n预测对象分组：\n" + json.dumps(PREDICTION_GROUPS, ensure_ascii=False)
         prediction_prompt += """
 \n请单独生成跨资产预测，只输出以下JSON：
 {"predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]}
-必须正好4项且target互不重复：至少1项股票或行业相对强弱（SPY、QQQ/SPY、IWM/SPY、XLK/SPY、XLF/SPY、XLE/SPY），至少1项利率或信用（TLT、HYG），至少1项避险或商品（GLD、USO），第4项可从上述对象或^VIX选择；不能4项都写同一方向；周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号；绝对方向使用UP/DOWN/NEUTRAL，相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
+
+必须正好5项且target互不重复。
+选择原则：
+1. 至少1项来自美国大盘/风格；
+2. 至少1项来自美国行业相对强弱；
+3. 至少1项来自利率或信用；
+4. 至少1项来自商品、美元或波动率；
+5. 第5项优先从海外市场或当天最有增量信号的其他类别中选择。
+6. 不要机械重复 SPY、QQQ/SPY、XLF/SPY、XLE/SPY、TLT；如果其他行业、海外市场、商品或信用出现更强证据，应主动替换。
+7. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
+8. 不得5项全部表达同一方向或同一风险因子；优先保持跨资产分散。
+9. 必须结合输入证据选择有增量信息的对象，不因标的知名度高而优先。
+10. 周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号。
+11. 绝对方向使用UP/DOWN/NEUTRAL；相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
 """
         prediction_system = "你是跨资产预测负责人。以分散、可验证和可复盘为首要原则，严格输出JSON。"
         prediction_result = self._complete_json(
@@ -649,11 +666,26 @@ class OpenAIAnalyzer:
 
     @staticmethod
     def _limit_predictions(predictions):
-        allowed = {
-            "SPY", "QQQ/SPY", "IWM/SPY", "XLK/SPY", "XLF/SPY", "XLE/SPY",
-            "HYG", "TLT", "GLD", "USO", "^VIX",
-        }
-        selected = []
+        """
+        最终跨资产预测守门：
+        - 只允许 market.py 定义的 PREDICTION_TARGETS；
+        - 去重；
+        - 最多5项；
+        - 尽量避免同一类别占满全部名额。
+
+        AI prompt 已负责要求跨资产分散；这里再做一次轻量防守，
+        但不会为了形式强行制造缺乏证据的预测。
+        """
+        if not isinstance(predictions, list):
+            return []
+
+        allowed = set(PREDICTION_TARGETS)
+        target_group = {}
+        for group, targets in PREDICTION_GROUPS.items():
+            for target in targets:
+                target_group[str(target).upper()] = group
+
+        normalized = []
         seen = set()
         for raw in predictions:
             if not isinstance(raw, dict):
@@ -663,10 +695,34 @@ class OpenAIAnalyzer:
                 continue
             item = dict(raw)
             item["target"] = target
-            selected.append(item)
+            normalized.append(item)
             seen.add(target)
-            if len(selected) == 5:
+
+        selected = []
+        selected_targets = set()
+        group_counts = {}
+
+        # 第一轮：单组最多2项，避免5项全挤在同一类。
+        for item in normalized:
+            target = item["target"]
+            group = target_group.get(target, "other")
+            if group_counts.get(group, 0) >= 2:
+                continue
+            selected.append(item)
+            selected_targets.add(target)
+            group_counts[group] = group_counts.get(group, 0) + 1
+            if len(selected) >= 5:
+                return selected
+
+        # 第二轮：若AI有效输出不足5项，再按原始排序补齐。
+        for item in normalized:
+            if item["target"] in selected_targets:
+                continue
+            selected.append(item)
+            selected_targets.add(item["target"])
+            if len(selected) >= 5:
                 break
+
         return selected
 
     @staticmethod
