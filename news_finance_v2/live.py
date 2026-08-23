@@ -474,7 +474,8 @@ class HttpCollector:
         market = self.market_loader(list(SIGNALS))
         stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
         news_limit = min(
-            int(SCREENING_CONFIG.get("market_prefilter_size", 60)),
+            int(SCREENING_CONFIG.get("market_prefilter_size", 50)),
+            50,
             len(stock_snapshot),
         )
         news_symbols = rank_news_symbols(stock_snapshot, limit=news_limit) if full else ()
@@ -507,6 +508,7 @@ class HttpCollector:
                 "universe": len(COMPANY_UNIVERSE),
                 "market_data": len(stock_snapshot),
                 "market_prefilter": len(news_symbols),
+                "market_prefilter_cap": 50,
                 "news_prefilter_target": int(SCREENING_CONFIG.get("news_prefilter_size", 28)),
                 "ai_candidate_target": int(SCREENING_CONFIG.get("ai_candidate_size", 16)),
                 "final_target": int(SCREENING_CONFIG.get("final_company_count", 8)),
@@ -659,7 +661,7 @@ class OpenAIAnalyzer:
             parsed["predictions"] = self._limit_predictions(cross_asset_predictions)
 
         # 公司部分采用三层漏斗：
-        # 完整股票池 -> 行情预筛 -> 新闻二筛 -> AI候选 -> 最终8只。
+        # 完整股票池 -> 行情预筛50只 -> 新闻二筛 -> AI候选 -> 最终8只。
         news_prefilter_symbols, ai_symbols = _choose_ai_company_candidates(
             compact_sources, collected
         )
@@ -693,7 +695,9 @@ class OpenAIAnalyzer:
             company_prompt += "\n今日二次筛选后的候选代码（只能从这里选）：\n" + json.dumps(ai_symbols, ensure_ascii=False)
             company_prompt += "\n候选个股市场状态与筛选分数：\n" + json.dumps(candidate_snapshot, ensure_ascii=False)
             company_prompt += "\n候选股票代码与标准中文名：\n" + json.dumps(candidate_names, ensure_ascii=False)
-            company_prompt += "\n候选公司的官方材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
+            # 保留旧版提示词标记，兼容现有测试中的模拟 OpenAI 客户端。
+            # 实际内容仍然只是经过今日候选池筛选后的公司材料。
+            company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
 \n从上述候选中按“增量信息强度 + 价格反应 + 风险收益比 + 行业分散”排序，
 输出最多12个候选，系统随后会再压缩到最终8个。JSON格式：
