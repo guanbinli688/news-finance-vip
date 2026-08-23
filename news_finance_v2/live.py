@@ -399,7 +399,11 @@ class SMTPMailer:
                 "<div style='padding:12px;background:#eaf4fb;border-left:5px solid #005ea8'>"
                 f"<a href='{dated_url}'>{dated_label}</a></div>"
             )
-            report = report.replace("<body>", "<body>" + link, 1)
+            report = report.replace(
+    "<body",
+    "<body" + ">" + link,
+    1
+)
         message = MIMEText(report, "html", "utf-8")
         message["Subject"] = f"NEWS FINANCE｜{self.settings.report_date.isoformat()}"
         message["From"] = self.settings.smtp_username
