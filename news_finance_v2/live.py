@@ -35,6 +35,58 @@ SCREENING_CONFIG.update(getattr(source_config, "SCREENING_CONFIG", {}))
 from .verification import verify_absolute, verify_relative
 
 
+# 一些新经济/事件股在旧版 sources.py 中可能只有 ticker，没有中文名。
+# 这里做兜底，避免页面出现“重点公司（HOOD）”这种泛化标题。
+_FALLBACK_COMPANY_NAMES = {
+    "HOOD": "Robinhood",
+    "COIN": "Coinbase",
+    "TEM": "Tempus AI",
+    "CRCL": "Circle",
+    "RKLB": "Rocket Lab",
+    "ASTS": "AST SpaceMobile",
+    "LUNR": "Intuitive Machines",
+    "RDW": "Redwire",
+    "OKLO": "Oklo",
+    "SMR": "NuScale Power",
+    "LEU": "Centrus Energy",
+    "IONQ": "IonQ",
+    "RGTI": "Rigetti Computing",
+    "QBTS": "D-Wave Quantum",
+    "SMCI": "超微电脑",
+    "VRT": "Vertiv",
+    "APP": "AppLovin",
+    "CRWV": "CoreWeave",
+    "NBIS": "Nebius",
+    "MSTR": "Strategy",
+    "HCA": "HCA医疗",
+    "FCX": "自由港麦克莫兰",
+    "TGT": "塔吉特",
+    "ROST": "罗斯百货",
+}
+
+_GENERIC_COMPANY_NAMES = {
+    "",
+    "重点公司",
+    "重点标的",
+    "公司",
+    "个股",
+    "候选公司",
+}
+
+
+def _company_display_name(symbol: str, fallback: str | None = None) -> str:
+    symbol = str(symbol or "").upper()
+    configured = str(COMPANY_NAMES.get(symbol, "") or "").strip()
+    if configured and configured not in _GENERIC_COMPANY_NAMES:
+        return configured
+
+    fallback_name = str(fallback or "").strip()
+    if fallback_name and fallback_name not in _GENERIC_COMPANY_NAMES:
+        return fallback_name
+
+    return _FALLBACK_COMPANY_NAMES.get(symbol, symbol)
+
+
 def _page_text(source: str) -> str:
     soup = BeautifulSoup(source or "", "html.parser")
     for tag in soup(["script", "style", "svg", "nav", "footer", "noscript"]):
@@ -71,6 +123,66 @@ def _default_market_loader(symbols):
             close = close.iloc[:, 0]
         if len(close):
             result[symbol] = float(close.iloc[-1])
+    return result
+
+
+def _default_market_context_loader(symbols):
+    """
+    批量读取跨资产 1日/5日/20日变化和趋势。
+
+    注意：原有 collected["market"] 仍保持 {ticker: 最新价格}，
+    不破坏数据库、验证和旧测试；新增的数据放在 market_context。
+    """
+    import yfinance as yf
+
+    symbols = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+    if not symbols:
+        return {}
+
+    try:
+        frame = yf.download(
+            list(symbols),
+            period="3mo",
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+            group_by="ticker",
+        )
+    except Exception:
+        return {}
+
+    if frame is None or frame.empty:
+        return {}
+
+    result = {}
+    for symbol in symbols:
+        try:
+            data = frame[symbol] if hasattr(frame.columns, "levels") else frame
+            close = data["Close"].dropna()
+            if len(close) < 22:
+                continue
+
+            latest = float(close.iloc[-1])
+            previous = float(close.iloc[-2])
+            close_5d = float(close.iloc[-6]) if len(close) >= 6 else previous
+            close_20d = float(close.iloc[-21])
+
+            returns = close.pct_change().dropna().tail(20)
+            volatility = max(float(returns.std()) * 100, 0.01)
+            ma20 = float(close.tail(20).mean())
+
+            result[symbol] = {
+                "price": round(latest, 4),
+                "day_change_pct": round((latest / previous - 1) * 100, 3),
+                "change_5d_pct": round((latest / close_5d - 1) * 100, 3),
+                "month_change_pct": round((latest / close_20d - 1) * 100, 3),
+                "volatility_20_pct": round(volatility, 3),
+                "above_ma20": latest >= ma20,
+                "ma20_gap_pct": round((latest / ma20 - 1) * 100, 3) if ma20 else 0.0,
+            }
+        except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError):
+            continue
+
     return result
 
 
@@ -224,6 +336,89 @@ def _stock_screen_score(symbol: str, snapshot: dict) -> tuple[float, list[str]]:
         score += 1.5
 
     return round(score, 3), reasons[:4]
+
+
+def _classify_stock_setup(snapshot: dict) -> tuple[str, float, list[str]]:
+    """
+    给第二轮选股增加“可执行性”维度。
+
+    第一轮 screen_score 负责找异常；
+    这里负责判断异常是否值得进入最终研究池：
+    - constructive_pullback: 上升结构中的可控回撤
+    - clean_breakout: 放量突破但不过热
+    - steady_strength: 稳健强势
+    - risk_breakdown: 破位/风险释放，适合进入“回避”候选
+    - overextended: 大涨过热，只保留重大事件，不鼓励追涨
+    - neutral: 暂无清晰技术形态
+    """
+    try:
+        day_change = float(snapshot.get("day_change_pct", 0.0))
+        change_5d = float(snapshot.get("change_5d_pct", 0.0))
+        volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.25)
+        volume_ratio = max(float(snapshot.get("volume_ratio_20", 1.0)), 0.0)
+        above_ma20 = bool(snapshot.get("above_ma20", False))
+        above_ma50 = bool(snapshot.get("above_ma50", False))
+        ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
+        ma50_gap = float(snapshot.get("ma50_gap_pct", 0.0))
+        position20 = float(snapshot.get("position_20d", 0.5))
+    except (TypeError, ValueError):
+        return "neutral", 0.0, []
+
+    tags = []
+
+    # 过热：这类股票可以进入新闻池，但不应霸占最终8只。
+    if (
+        day_change >= max(7.0, 1.8 * volatility)
+        or ma20_gap >= 12.0
+        or (position20 >= 0.97 and ma20_gap >= 8.0)
+    ):
+        tags.append("短线过热")
+        return "overextended", -12.0, tags
+
+    # 趋势中的回撤：更符合“等确认后参与”的可执行风格。
+    if (
+        day_change <= -0.20 * volatility
+        and day_change >= -1.60 * volatility
+        and above_ma50
+        and ma50_gap >= -4.0
+        and ma20_gap >= -7.0
+    ):
+        tags.append("上升结构中的可控回撤")
+        return "constructive_pullback", 18.0, tags
+
+    # 不过热的放量突破。
+    if (
+        day_change >= 0.30 * volatility
+        and day_change <= 1.60 * volatility
+        and volume_ratio >= 1.25
+        and above_ma20
+        and above_ma50
+        and ma20_gap <= 8.0
+    ):
+        tags.append("放量转强")
+        return "clean_breakout", 16.0, tags
+
+    # 稳健强势：不是单日暴冲，而是5日结构较好。
+    if (
+        above_ma20
+        and above_ma50
+        and 0.0 <= day_change <= max(4.0, 1.0 * volatility)
+        and change_5d >= max(2.0, 0.8 * volatility)
+        and ma20_gap <= 7.0
+    ):
+        tags.append("趋势稳健")
+        return "steady_strength", 10.0, tags
+
+    # 明显破位也值得进入最终研究池，因为“回避”也是有价值的动作。
+    if (
+        day_change <= -0.80 * volatility
+        and not above_ma20
+        and (not above_ma50 or ma20_gap <= -5.0)
+    ):
+        tags.append("风险破位")
+        return "risk_breakdown", 13.0, tags
+
+    return "neutral", 0.0, tags
 
 
 def _sector_of(symbol: str) -> str:
@@ -416,14 +611,34 @@ def _choose_ai_company_candidates(compact_sources, collected):
         ir_text = "\n".join(item.get("text", "") for item in ir_by_symbol.get(symbol, []))
 
         event_score = _news_event_score(news_text)
+        setup_type, setup_score, setup_tags = _classify_stock_setup(snapshot)
+
         # IR只给很小加成，避免固定IR公司长期霸榜。
         ir_bonus = min(_news_event_score(ir_text) * 0.20, 3.0)
         source_bonus = 2.0 if news_by_symbol.get(symbol) else 0.0
 
-        total = market_score + event_score + ir_bonus + source_bonus
+        # 第二轮不再简单延续“谁涨跌最大谁优先”。
+        # 让事件、可执行形态和风险形态获得更高权重，
+        # 对短线过热股票降权，避免最终8只全是当日大涨股。
+        total = (
+            market_score * 0.45
+            + event_score * 1.25
+            + setup_score
+            + ir_bonus
+            + source_bonus
+        )
+
+        if setup_type == "overextended":
+            # 若没有足够事件支撑，进一步降低“纯情绪暴冲股”的优先级。
+            if event_score < 8.0:
+                total -= 8.0
+
         ranked.append((round(total, 3), symbol))
 
         snapshot["news_event_score"] = round(event_score, 3)
+        snapshot["setup_type"] = setup_type
+        snapshot["setup_score"] = round(setup_score, 3)
+        snapshot["setup_tags"] = setup_tags
         snapshot["candidate_score"] = round(total, 3)
 
     ranked.sort(key=lambda item: (-item[0], item[1]))
@@ -437,17 +652,88 @@ def _choose_ai_company_candidates(compact_sources, collected):
     )
 
     ai_limit = min(int(SCREENING_CONFIG.get("ai_candidate_size", 16)), len(news_ranked))
-    ai_ranked = _select_diverse_symbols(
+    ai_ranked = _select_balanced_ai_symbols(
         news_ranked,
+        stock_snapshot,
         ai_limit,
-        max_per_sector=max(3, ai_limit // 5),
     )
 
     return [symbol for _, symbol in news_ranked], [symbol for _, symbol in ai_ranked]
 
 
+def _select_balanced_ai_symbols(ranked, stock_snapshot, limit: int):
+    """
+    AI最终候选池做“软平衡”。
+
+    目标不是强行凑类型，而是避免16只候选全部来自同一种
+    单日暴涨形态。优先保证：
+    - 过热股最多约25%
+    - 同行业不过度集中
+    - 可控回撤 / 突破 / 风险破位都有机会进入
+    """
+    if limit <= 0:
+        return []
+
+    max_overextended = max(2, limit // 4)
+    max_per_sector = max(3, limit // 5)
+
+    selected = []
+    deferred = []
+    sector_counts = {}
+    overextended_count = 0
+
+    # 第一轮：控制行业和过热股占比。
+    for score, symbol in ranked:
+        snapshot = stock_snapshot.get(symbol, {})
+        setup_type = str(snapshot.get("setup_type", "neutral"))
+        sector = _sector_of(symbol)
+
+        if (
+            setup_type == "overextended"
+            and overextended_count >= max_overextended
+        ):
+            deferred.append((score, symbol))
+            continue
+
+        if (
+            sector != "other"
+            and sector_counts.get(sector, 0) >= max_per_sector
+        ):
+            deferred.append((score, symbol))
+            continue
+
+        selected.append((score, symbol))
+        if setup_type == "overextended":
+            overextended_count += 1
+        if sector != "other":
+            sector_counts[sector] = sector_counts.get(sector, 0) + 1
+
+        if len(selected) >= limit:
+            return selected
+
+    # 第二轮：如果数量不足，再按分数补齐，不为了形式丢掉高质量候选。
+    selected_symbols = {symbol for _, symbol in selected}
+    for score, symbol in deferred:
+        if symbol in selected_symbols:
+            continue
+        selected.append((score, symbol))
+        selected_symbols.add(symbol)
+        if len(selected) >= limit:
+            break
+
+    return selected
+
+
 class HttpCollector:
-    def __init__(self, settings: Settings, *, session=None, market_loader=None, stock_loader=None):
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        session=None,
+        market_loader=None,
+        stock_loader=None,
+        market_context_loader=None,
+    ):
         self.settings = settings
         self._external_session = session is not None
         self.session = session or requests.Session()
@@ -458,6 +744,15 @@ class HttpCollector:
         })
         self.market_loader = market_loader or _default_market_loader
         self.stock_loader = stock_loader or _default_stock_loader
+
+        # 只有生产环境默认路径才自动额外抓跨资产趋势；
+        # 测试/自定义session不会因为这项增强而触发真实网络请求。
+        if market_context_loader is not None:
+            self.market_context_loader = market_context_loader
+        elif session is None and market_loader is None:
+            self.market_context_loader = _default_market_context_loader
+        else:
+            self.market_context_loader = None
 
     def collect(self, full=False):
         evidence_kinds = {"market"}
@@ -472,6 +767,13 @@ class HttpCollector:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 records = list(executor.map(lambda spec: self._fetch(*spec), specs))
         market = self.market_loader(list(SIGNALS))
+        market_context = {}
+        if full and self.market_context_loader is not None:
+            try:
+                market_context = self.market_context_loader(list(SIGNALS))
+            except Exception:
+                market_context = {}
+
         stock_snapshot = self.stock_loader(COMPANY_UNIVERSE) if full else {}
         news_limit = min(
             int(SCREENING_CONFIG.get("market_prefilter_size", 50)),
@@ -500,6 +802,7 @@ class HttpCollector:
         return {
             "sources": records, "core_failures": core_failures,
             "evidence_kinds": evidence_kinds, "market": market,
+            "market_context": market_context,
             "market_coverage": len(market) / len(SIGNALS), "events": events,
             "stock_snapshot": stock_snapshot,
             "universe_size": len(COMPANY_UNIVERSE),
@@ -607,7 +910,8 @@ class OpenAIAnalyzer:
             item for item in compact_sources
             if item.get("kind") in {"official", "media"}
         ]
-        prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prompt = "市场最新价格：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
         prompt += """
@@ -625,12 +929,13 @@ class OpenAIAnalyzer:
   "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","impact":"","sources":[]}],
   "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
 }
-约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；表达应细腻、克制、专业，结论明确但不过度武断；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
+约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；表达应细腻、克制、专业，结论明确但不过度武断；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；flows表示“相对配置倾向/可能轮动”，除非输入有直接资金流证据，否则不得声称已经发生真实资金流；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
 """
         system_prompt = "你是成熟、克制且措辞温和的中文跨资产投资研究员。只依据输入证据，先给动作再解释原因，不承诺收益。严格输出JSON。"
         parsed = self._complete_json("master", system_prompt, prompt)
 
-        prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prediction_prompt = "市场最新价格：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
+        prediction_prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prediction_prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
         prediction_prompt += "\n允许预测的完整对象：\n" + json.dumps(PREDICTION_TARGETS, ensure_ascii=False)
@@ -648,7 +953,7 @@ class OpenAIAnalyzer:
 5. 不要机械重复 SPY、QQQ/SPY、XLF/SPY、XLE/SPY、TLT；如果其他行业、海外市场、商品或信用出现更强证据，应主动替换。
 6. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
 7. 不得4项全部表达同一方向或同一风险因子；优先保持跨资产分散。
-8. 必须结合输入证据选择有增量信息的对象，不因标的知名度高而优先。
+8. 必须优先参考1日/5日/20日变化、20日波动率和MA20位置，再结合新闻与政策证据；不因标的知名度高而优先。
 9. 周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号。
 10. 绝对方向使用UP/DOWN/NEUTRAL；相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
 """
@@ -682,7 +987,7 @@ class OpenAIAnalyzer:
             if symbol in stock_snapshot
         }
         candidate_names = {
-            symbol: COMPANY_NAMES.get(symbol, symbol)
+            symbol: _company_display_name(symbol)
             for symbol in ai_symbols
         }
 
@@ -706,20 +1011,23 @@ class OpenAIAnalyzer:
 硬约束：
 1. 只输出JSON；ticker只能来自“今日二次筛选后的候选代码”，禁止从记忆补充其他股票。
 2. 除ticker和source外全部使用简体中文。
-3. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息的股票。
-4. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
-5. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
+3. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息且“下一步动作清晰”的股票。
+4. 必须综合 candidate_score、news_event_score、setup_type、setup_score；不能把最终名单简单变成“当日涨幅榜”。
+5. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
+6. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
    A. 上升趋势中的可控回撤/止跌；
    B. 放量突破或趋势重新转强，但触发条件必须防止追高。
-6. 明确重大利空导致下跌、且核心逻辑受损的，应优先“回避”，不能机械当作抄底机会。
-7. “等待”用于方向尚可但价格、成交量或事件确认不足的股票。
-8. 不能只凭网站介绍或单条媒体标题；公司官网页面若只有宣传性内容，不得作为主要论据。
-9. 每家公司结论必须不同，brief不超过55字，trigger和risk各不超过35字。
-10. 不编造买卖价格，不承诺收益，不为了凑数量牺牲证据质量。
+7. setup_type=overextended 的股票原则上不得标“关注”，除非事件极强且触发条件明确要求回踩/整理后再参与。
+8. setup_type=risk_breakdown 且存在基本面或事件利空时，应优先考虑“回避”，不能机械抄底。
+9. “等待”用于方向尚可但价格、成交量或事件确认不足的股票；不要因为措辞保守而把所有股票都写成“等待”。
+10. 若候选中确有满足条件的机会，优先给出2-4只行业分散的“关注”；若存在明确破位/重大利空，也应给出1-2只“回避”。没有合格对象时可以不凑数量。
+11. 不能只凭网站介绍或单条媒体标题；公司官网页面若只有宣传性内容，不得作为主要论据。
+12. 每家公司结论必须不同，brief不超过55字，trigger和risk各不超过35字。
+13. 不编造买卖价格，不承诺收益，不为了凑数量牺牲证据质量。
 """
             company_system = (
                 "你是中文美股研究负责人。你面对的是已经通过量价和新闻初筛的候选池。"
-                "你的任务是做最后一轮精挑细选，而不是偏爱熟悉的大公司。"
+                "你的任务是做最后一轮精挑细选，而不是偏爱熟悉的大公司或当日涨幅最大的股票。"
                 "只依据输入证据，严格输出JSON。"
             )
             company_result = self._complete_json("company", company_system, company_prompt)
@@ -850,19 +1158,39 @@ class OpenAIAnalyzer:
                         above_ma50 = bool(snapshot.get("above_ma50", False))
                         ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
 
+                        setup_type = str(snapshot.get("setup_type", "neutral"))
+
                         controlled_pullback = (
-                            day_change <= -0.25 * volatility
-                            and day_change >= -2.25 * volatility
-                            and (above_ma20 or above_ma50)
+                            day_change <= -0.20 * volatility
+                            and day_change >= -1.60 * volatility
+                            and above_ma50
+                            and ma20_gap >= -7.0
                         )
                         confirmed_breakout = (
-                            day_change >= 0.35 * volatility
-                            and volume_ratio >= 1.30
+                            day_change >= 0.30 * volatility
+                            and day_change <= 1.60 * volatility
+                            and volume_ratio >= 1.25
                             and above_ma20
                             and above_ma50
-                            and ma20_gap <= 10.0
+                            and ma20_gap <= 8.0
                         )
-                        actionable = controlled_pullback or confirmed_breakout
+                        steady_strength = (
+                            setup_type == "steady_strength"
+                            and above_ma20
+                            and above_ma50
+                            and ma20_gap <= 7.0
+                        )
+
+                        actionable = (
+                            controlled_pullback
+                            or confirmed_breakout
+                            or steady_strength
+                        )
+
+                        # 明确过热的股票即使AI给“关注”，也先降级为等待，
+                        # 避免报告在+8%、+13%之后再提示追涨。
+                        if setup_type == "overextended":
+                            actionable = False
                 except (TypeError, ValueError):
                     actionable = False
 
@@ -874,8 +1202,9 @@ class OpenAIAnalyzer:
                 focus_count += 1
 
             item["ticker"] = ticker
-            item["company"] = COMPANY_NAMES.get(
-                ticker, item.get("company") or ticker
+            item["company"] = _company_display_name(
+                ticker,
+                item.get("company"),
             )
             item["stance"] = stance
             item["_sector"] = _sector_of(ticker)
