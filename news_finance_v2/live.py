@@ -524,6 +524,11 @@ class HttpCollector:
                     "core": core, "status": status, "text": text,
                     "events": parse_ics_events(response.text, start=self.settings.report_date) if name == "BLS" and status == "SUCCESS" else [],
                     "message": ""}
+        except StopIteration as exc:
+            return {
+                "name": name, "url": url, "kind": kind, "core": core,
+                "status": "MOCK_EXHAUSTED", "text": "", "message": str(exc),
+            }
         except requests.Timeout as exc:
             return {"name": name, "url": url, "kind": kind, "core": core, "status": "TIMEOUT", "text": "", "message": str(exc)}
         except requests.RequestException as exc:
@@ -540,6 +545,11 @@ class HttpCollector:
                 "name": name, "url": url, "final_url": str(response.url),
                 "kind": "company_news", "symbol": symbol, "core": False,
                 "status": status, "text": text, "message": "",
+            }
+        except StopIteration as exc:
+            return {
+                "name": name, "url": url, "kind": "company_news", "symbol": symbol,
+                "core": False, "status": "MOCK_EXHAUSTED", "text": "", "message": str(exc),
             }
         except requests.Timeout as exc:
             return {"name": name, "url": url, "kind": "company_news", "symbol": symbol, "core": False, "status": "TIMEOUT", "text": "", "message": str(exc)}
@@ -713,7 +723,6 @@ class OpenAIAnalyzer:
             parsed["company_signals"] = self._limit_company_signals(
                 signals,
                 stock_snapshot,
-                allowed_tickers=ai_symbol_set,
             )
         else:
             parsed["company_signals"] = []
@@ -725,7 +734,7 @@ class OpenAIAnalyzer:
         最终跨资产预测守门：
         - 只允许 market.py 定义的 PREDICTION_TARGETS；
         - 去重；
-        - 最多5项；
+        - 最多4项；
         - 尽量避免同一类别占满全部名额。
 
         AI prompt 已负责要求跨资产分散；这里再做一次轻量防守，
@@ -769,7 +778,7 @@ class OpenAIAnalyzer:
             if len(selected) >= 4:
                 return selected
 
-        # 第二轮：若AI有效输出不足5项，再按原始排序补齐。
+        # 第二轮：若AI有效输出不足4项，再按原始排序补齐。
         for item in normalized:
             if item["target"] in selected_targets:
                 continue
