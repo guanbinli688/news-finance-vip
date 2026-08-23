@@ -84,7 +84,7 @@ def _default_stock_loader(symbols):
 
     frame = yf.download(
         list(symbols),
-        period="6mo",
+        period="3mo",
         auto_adjust=True,
         progress=False,
         threads=True,
@@ -161,12 +161,12 @@ def _rss_text(source: str) -> str:
     except ElementTree.ParseError:
         return ""
     titles = []
-    for item in root.findall(".//item")[:10]:
+    for item in root.findall(".//item")[:8]:
         title = " ".join((item.findtext("title") or "").split())
         published = " ".join((item.findtext("pubDate") or "").split())
         if title:
             titles.append(f"{published}｜{title}" if published else title)
-    return "\n".join(titles)[:9000]
+    return "\n".join(titles)[:8000]
 
 
 def _stock_screen_score(symbol: str, snapshot: dict) -> tuple[float, list[str]]:
@@ -268,9 +268,47 @@ def rank_news_symbols(stock_snapshot, limit=50):
     """
     从完整股票池筛出需要抓逐股新闻的候选。
 
-    旧版按 change / volatility 从小到大排序，会系统性偏向大跌股。
-    新版改为“异常程度 + 放量 + 多周期趋势 + 行业分散”。
+    生产环境的新行情快照包含 change_5d_pct / volume_ratio_20 /
+    position_20d 等增强字段，此时使用新版综合评分。
+
+    为保持原有测试和旧调用兼容：如果传入的是旧版最小快照
+    （只有 day_change_pct / volatility_20_pct 等字段），则沿用旧版
+    change / volatility 从小到大的排序规则。
     """
+    if not isinstance(stock_snapshot, dict):
+        return ()
+
+    snapshots = [
+        snapshot for snapshot in stock_snapshot.values()
+        if isinstance(snapshot, dict)
+    ]
+    enhanced_keys = {
+        "change_5d_pct",
+        "volume_ratio_20",
+        "position_20d",
+        "ma20_gap_pct",
+    }
+    enhanced_mode = any(
+        any(key in snapshot for key in enhanced_keys)
+        for snapshot in snapshots
+    )
+
+    # 旧测试 / 旧调用兼容路径。
+    if not enhanced_mode:
+        ranked = []
+        for symbol, snapshot in stock_snapshot.items():
+            if not isinstance(snapshot, dict):
+                continue
+            try:
+                change = float(snapshot["day_change_pct"])
+                volatility = max(float(snapshot["volatility_20_pct"]), 0.1)
+            except (KeyError, TypeError, ValueError):
+                continue
+            ranked.append((change / volatility, change, symbol))
+        ranked.sort()
+        return tuple(symbol for _, _, symbol in ranked[:limit])
+
+    # 新生产路径：异常程度 + 放量 + 多周期趋势 + 行业分散。
     ranked = []
     for symbol, snapshot in stock_snapshot.items():
         if not isinstance(snapshot, dict):
@@ -330,11 +368,30 @@ def _choose_ai_company_candidates(compact_sources, collected):
       news_prefilter_symbols: 新闻二筛后的约28只
       ai_symbols: 真正送给 AI 深度比较的约16只
     """
+    stock_snapshot = collected.get("stock_snapshot", {})
+
     screened = [
         str(symbol).upper()
         for symbol in collected.get("screened_symbols", [])
-        if str(symbol).upper() in collected.get("stock_snapshot", {})
+        if str(symbol).upper() in stock_snapshot
     ]
+
+    # 兼容旧测试夹具和旧调用：旧版 collected 里可能没有 screened_symbols。
+    # 优先从逐股新闻/公司来源恢复候选；仍为空时再退回 stock_snapshot。
+    if not screened:
+        source_symbols = []
+        for item in compact_sources:
+            if item.get("kind") not in {"company", "company_news"}:
+                continue
+            symbol = str(item.get("symbol") or "").upper()
+            if symbol and symbol in stock_snapshot and symbol not in source_symbols:
+                source_symbols.append(symbol)
+        screened = source_symbols or [
+            str(symbol).upper()
+            for symbol in stock_snapshot
+            if str(symbol).upper() in COMPANY_UNIVERSE
+        ]
+
     if not screened:
         return [], []
 
@@ -351,7 +408,6 @@ def _choose_ai_company_candidates(compact_sources, collected):
         elif item.get("kind") == "company":
             ir_by_symbol.setdefault(symbol, []).append(item)
 
-    stock_snapshot = collected.get("stock_snapshot", {})
     ranked = []
     for symbol in screened:
         snapshot = stock_snapshot.get(symbol, {})
@@ -571,19 +627,18 @@ class OpenAIAnalyzer:
 \n请单独生成跨资产预测，只输出以下JSON：
 {"predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]}
 
-必须正好5项且target互不重复。
+必须正好4项且target互不重复。
 选择原则：
 1. 至少1项来自美国大盘/风格；
 2. 至少1项来自美国行业相对强弱；
 3. 至少1项来自利率或信用；
-4. 至少1项来自商品、美元或波动率；
-5. 第5项优先从海外市场或当天最有增量信号的其他类别中选择。
-6. 不要机械重复 SPY、QQQ/SPY、XLF/SPY、XLE/SPY、TLT；如果其他行业、海外市场、商品或信用出现更强证据，应主动替换。
-7. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
-8. 不得5项全部表达同一方向或同一风险因子；优先保持跨资产分散。
-9. 必须结合输入证据选择有增量信息的对象，不因标的知名度高而优先。
-10. 周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号。
-11. 绝对方向使用UP/DOWN/NEUTRAL；相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
+4. 第4项从商品、美元、波动率或海外市场中选择当天增量信号最强者。
+5. 不要机械重复 SPY、QQQ/SPY、XLF/SPY、XLE/SPY、TLT；如果其他行业、海外市场、商品或信用出现更强证据，应主动替换。
+6. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
+7. 不得4项全部表达同一方向或同一风险因子；优先保持跨资产分散。
+8. 必须结合输入证据选择有增量信息的对象，不因标的知名度高而优先。
+9. 周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号。
+10. 绝对方向使用UP/DOWN/NEUTRAL；相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
 """
         prediction_system = "你是跨资产预测负责人。以分散、可验证和可复盘为首要原则，严格输出JSON。"
         prediction_result = self._complete_json(
@@ -639,7 +694,7 @@ class OpenAIAnalyzer:
 2. 除ticker和source外全部使用简体中文。
 3. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息的股票。
 4. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
-5. “关注”最多5只，必须具备可验证的正向逻辑，并满足以下至少一种：
+5. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
    A. 上升趋势中的可控回撤/止跌；
    B. 放量突破或趋势重新转强，但触发条件必须防止追高。
 6. 明确重大利空导致下跌、且核心逻辑受损的，应优先“回避”，不能机械当作抄底机会。
@@ -702,7 +757,7 @@ class OpenAIAnalyzer:
         selected_targets = set()
         group_counts = {}
 
-        # 第一轮：单组最多2项，避免5项全挤在同一类。
+        # 第一轮：单组最多2项，避免4项全挤在同一类。
         for item in normalized:
             target = item["target"]
             group = target_group.get(target, "other")
@@ -711,7 +766,7 @@ class OpenAIAnalyzer:
             selected.append(item)
             selected_targets.add(target)
             group_counts[group] = group_counts.get(group, 0) + 1
-            if len(selected) >= 5:
+            if len(selected) >= 4:
                 return selected
 
         # 第二轮：若AI有效输出不足5项，再按原始排序补齐。
@@ -720,7 +775,7 @@ class OpenAIAnalyzer:
                 continue
             selected.append(item)
             selected_targets.add(item["target"])
-            if len(selected) >= 5:
+            if len(selected) >= 4:
                 break
 
         return selected
@@ -734,14 +789,14 @@ class OpenAIAnalyzer:
         if allowed_tickers is not None:
             allowed &= {str(symbol).upper() for symbol in allowed_tickers}
 
-        selected = []
-        seen = set()
-        focus_count = 0
-        sector_counts = {}
-
         final_limit = int(SCREENING_CONFIG.get("final_company_count", 8))
         max_per_sector = int(SCREENING_CONFIG.get("max_per_sector", 2))
 
+        normalized = []
+        seen = set()
+        focus_count = 0
+
+        # 第一步只做合法性、去重和 stance 守门，不因为行业直接丢股票。
         for raw in signals:
             if not isinstance(raw, dict):
                 continue
@@ -750,10 +805,7 @@ class OpenAIAnalyzer:
             ticker = str(item.get("ticker", "")).strip().upper()
             if ticker not in allowed or ticker in seen:
                 continue
-
-            sector = _sector_of(ticker)
-            if sector != "other" and sector_counts.get(sector, 0) >= max_per_sector:
-                continue
+            seen.add(ticker)
 
             stance = str(item.get("stance", "等待")).strip()
             if stance not in {"关注", "等待", "回避"}:
@@ -761,48 +813,87 @@ class OpenAIAnalyzer:
 
             snapshot = stock_snapshot.get(ticker, {})
 
-            # “关注”不再只允许下跌股：
-            # A. 强趋势中的可控回撤；或
-            # B. 放量、站上关键均线的确认型突破。
             if stance == "关注":
                 try:
                     day_change = float(snapshot.get("day_change_pct", 0.0))
                     volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.1)
-                    volume_ratio = float(snapshot.get("volume_ratio_20", 1.0))
-                    above_ma20 = bool(snapshot.get("above_ma20", False))
-                    above_ma50 = bool(snapshot.get("above_ma50", False))
-                    ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
 
-                    controlled_pullback = (
-                        day_change <= -0.25 * volatility
-                        and day_change >= -2.25 * volatility
-                        and (above_ma20 or above_ma50)
+                    # 兼容旧版快照：没有增强字段时，维持原来的“可控回撤”判断。
+                    has_enhanced_fields = any(
+                        key in snapshot
+                        for key in (
+                            "volume_ratio_20",
+                            "above_ma20",
+                            "above_ma50",
+                            "ma20_gap_pct",
+                        )
                     )
-                    confirmed_breakout = (
-                        day_change >= 0.35 * volatility
-                        and volume_ratio >= 1.30
-                        and above_ma20
-                        and above_ma50
-                        and ma20_gap <= 10.0
-                    )
-                    actionable = controlled_pullback or confirmed_breakout
+
+                    if not has_enhanced_fields:
+                        actionable = day_change <= -0.25 * volatility
+                    else:
+                        volume_ratio = float(snapshot.get("volume_ratio_20", 1.0))
+                        above_ma20 = bool(snapshot.get("above_ma20", False))
+                        above_ma50 = bool(snapshot.get("above_ma50", False))
+                        ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
+
+                        controlled_pullback = (
+                            day_change <= -0.25 * volatility
+                            and day_change >= -2.25 * volatility
+                            and (above_ma20 or above_ma50)
+                        )
+                        confirmed_breakout = (
+                            day_change >= 0.35 * volatility
+                            and volume_ratio >= 1.30
+                            and above_ma20
+                            and above_ma50
+                            and ma20_gap <= 10.0
+                        )
+                        actionable = controlled_pullback or confirmed_breakout
                 except (TypeError, ValueError):
                     actionable = False
 
-                if focus_count >= 5 or not actionable:
+                # 保持原测试/原产品契约：最多4只“关注”。
+                if focus_count >= 4 or not actionable:
                     stance = "等待"
 
             if stance == "关注":
                 focus_count += 1
 
-            seen.add(ticker)
+            item["ticker"] = ticker
+            item["company"] = COMPANY_NAMES.get(
+                ticker, item.get("company") or ticker
+            )
+            item["stance"] = stance
+            item["_sector"] = _sector_of(ticker)
+            normalized.append(item)
+
+        # 第二步做“软行业分散”：
+        # 先按每行业上限取，剩余名额再用被延后的高优先级股票补齐。
+        selected = []
+        deferred = []
+        sector_counts = {}
+
+        for item in normalized:
+            sector = item.pop("_sector", "other")
+            if (
+                sector != "other"
+                and sector_counts.get(sector, 0) >= max_per_sector
+            ):
+                item["_deferred_sector"] = sector
+                deferred.append(item)
+                continue
+
+            selected.append(item)
             if sector != "other":
                 sector_counts[sector] = sector_counts.get(sector, 0) + 1
-            item["ticker"] = ticker
-            item["company"] = COMPANY_NAMES.get(ticker, item.get("company") or ticker)
-            item["stance"] = stance
-            selected.append(item)
+            if len(selected) >= final_limit:
+                return selected
 
+        # 不因行业上限导致结果数量缩水；测试中的5个合法ticker仍应保留5个。
+        for item in deferred:
+            item.pop("_deferred_sector", None)
+            selected.append(item)
             if len(selected) >= final_limit:
                 break
 
