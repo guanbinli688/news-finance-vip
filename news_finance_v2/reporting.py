@@ -340,4 +340,57 @@ def render_report(context: dict) -> str:
 <section id="market-focus"><div class="section-heading"><h2>六｜市场正在交易什么</h2><small>MARKET FOCUS</small></div><div class="source-grid media-grid">{_source_cards(context,'media')}</div></section>
 <section id="forecast"><div class="section-heading"><h2>七｜预测与验证</h2><small>FORECAST &amp; REVIEW</small></div><p class="prediction-note">判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。</p>{_predictions(context)}</section>
 <aside class="integrity"><span class="integrity-title">数据完整性</span><div class="{audit_class}"><strong>{audit_title}</strong>　核心失败：{esc(' · '.join(failures) or '无')}　门槛原因：{esc(', '.join(gate.reasons) or '无')}</div><div class="metrics"><span>覆盖率 <strong>{context.get('market_coverage',0):.0%}</strong></span><span>冻结 <strong>{context.get('predictions_frozen',0)}</strong></span><span>来源 <strong>{len(context.get('sources',[]))}</strong></span></div></aside>
-</main><footer><div class="wrap footer-main"><div class="footer-brand-block"><div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div><div><div class="footer-brand">NEWS FINANCE</div><div class="footer-tagline">Independent research for a clearer view of macro events, capital flows and equity decisions.</div></div></div><div class="footer-col"><h3>MARKET INTELLIGENCE</h3><p>Macro Outlook<br>Capital Flow<br>Sector Rotation<br>Equity Actions</p></div><div class="footer-col"><h3>RESEARCH FRAMEWORK</h3><p>官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</p></div><div class="footer-col"><h3>DISCLOSURE</h3><p>独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益保证或证券买卖承诺。</p></div></div><div class="wrap footer-scope"><div>MACRO SIGNALS<small>Economy · Rates · Risk Appetite</small></div><div>CAPITAL TRANSMISSION<small>Flows · Sectors · Impact Chain</small></div><div>EQUITY DECISIONS<small>Watch · Wait · Avoid · Triggers</small></div></div><div class="wrap footer-bottom"><span>NEWS FINANCE · INDEPENDENT MARKET RESEARCH</span><span>PUBLIC INFORMATION · NON-GOVERNMENT WEBSITE · {esc(report_date)}</span></div></footer></body></html>"""
+</main><footer>
+<div class="wrap footer-main">
+
+<div class="footer-brand-block">
+<div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div>
+<div>
+<div class="footer-brand">NEWS FINANCE</div>
+<div class="footer-tagline">
+Independent research for a clearer view of macro events, capital flows and equity decisions.
+</div>
+</div>
+</div>
+
+<div class="footer-col">
+<h3>MARKET INTELLIGENCE</h3>
+<p>
+Macro Outlook<br>
+Capital Flow<br>
+Sector Rotation<br>
+Equity Actions
+</p>
+</div>
+
+<div class="footer-col">
+<h3>RESEARCH FRAMEWORK</h3>
+<p>
+官方数据 · 公司公告<br>
+跨资产验证 · 事件推演<br>
+历史参照 · 事后复盘
+</p>
+</div>
+
+<div class="footer-col">
+<h3>DISCLOSURE</h3>
+<p>
+独立投资研究，非美国政府网站。
+本报告仅用于研究与学习，
+不构成投资建议、收益保证或证券买卖承诺。
+</p>
+</div>
+
+</div>
+
+<div class="wrap footer-bottom">
+<span>
+NEWS FINANCE · INDEPENDENT MARKET RESEARCH
+</span>
+
+<span>
+PUBLIC INFORMATION · NON-GOVERNMENT WEBSITE · {esc(report_date)}
+</span>
+</div>
+
+</footer></body></html>
