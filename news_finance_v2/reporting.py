@@ -755,9 +755,19 @@ def _source_cards(context, kind):
             full = {code: prefixes[code] + str(vals[code]) for code in LANG_CODES if vals.get(code)}
             details = f"<div class='card-note'{_i18n_attr(full)}>资产影响：{esc(impact)}</div>"
 
-        signal_class = "focus" if label == "关注" else "avoid" if label == "回避" else "wait"
+        if kind == "company":
+            signal_class = "focus" if label == "关注" else "avoid" if label == "回避" else "wait"
+            card_class = f"signal-{signal_class}"
+        else:
+            tone_class = {
+                "积极": "tone-positive",
+                "谨慎": "tone-cautious",
+                "中性": "tone-neutral",
+            }.get(str(label), "tone-neutral")
+            card_class = tone_class
+
         curated_cards.append(
-            f"<div class='source-card signal-{signal_class}'>"
+            f"<div class='source-card {card_class}'>"
             f"<div class='card-label'{_i18n_attr(label_i18n)}>{esc(label)}</div>"
             f"<h3{_i18n_attr(title_i18n)}>{esc(title)}</h3>"
             f"<p{_i18n_attr(_field_i18n(item, 'brief'))}>{esc(brief)}</p>"
@@ -839,6 +849,23 @@ footer{position:relative;overflow:hidden;background:var(--navy);color:#d7e0e9;bo
 CSS += r"""
 .ticker-bar{font-size:10px;letter-spacing:.29em}.ticker-track{animation-duration:38s}.ticker-track span{padding-top:13px;padding-bottom:12px}.navbar{border-bottom-width:2px}.nav-inner a{transition:color .25s ease,transform .25s ease}
 main{padding-top:28px}section{margin-bottom:28px;border-top:1px solid #c5cfd9;transform:translateZ(0);transition:transform .38s cubic-bezier(.2,.75,.25,1),box-shadow .38s ease,border-color .3s ease}section:hover{border-color:#aebdca}.horizon,.action-box,.logic,.source-card,.day,.flow{transition:transform .32s cubic-bezier(.2,.75,.25,1),box-shadow .32s ease,border-color .3s ease,background-color .3s ease}.horizon{border-top:1px solid var(--line);border-left:4px solid #52718e}.action-box{border-top:1px solid var(--line);border-left:4px solid #b49a58}.logic-root{background:linear-gradient(105deg,#e2e9ef,#f5f7f9);color:var(--navy);text-align:left;border:1px solid #c9d3dc;border-left:5px solid var(--red);border-bottom:1px solid #c9d3dc;box-shadow:0 6px 15px rgba(7,26,52,.055);font-size:23px}.logic{border-top:1px solid var(--line);border-left:4px solid #345f84}.source-card{border-top:1px solid var(--line);border-left:4px solid #6d8295}.source-card.signal-focus{border-left-color:#23824a}.source-card.signal-wait{border-left-color:#176ca8}.source-card.signal-avoid{border-left-color:#b32635}.source-card.signal-focus .card-label{background:#e5f4e9;color:#176a3a;border-left-color:#23824a}.source-card.signal-wait .card-label{background:#e3eef7;color:#075a91;border-left-color:#176ca8}.source-card.signal-avoid .card-label{background:#f8e5e8;color:#a61f31;border-left-color:#b32635}.source-card.signal-focus .card-risk,.source-card.signal-wait .card-risk,.source-card.signal-avoid .card-risk{color:#962536}
+/* MARKET FOCUS tone colors:
+   积极 = green, 谨慎 = amber/red, 中性 = slate blue.
+   These classes are driven by the underlying Chinese tone value, so
+   language switching does not change the semantic color. */
+.source-card.tone-positive{border-left-color:#23824a}
+.source-card.tone-positive .card-label{
+    background:#e5f4e9;color:#176a3a;border-left-color:#23824a
+}
+.source-card.tone-cautious{border-left-color:#c26a1b}
+.source-card.tone-cautious .card-label{
+    background:#fff0df;color:#9a4d0a;border-left-color:#c26a1b
+}
+.source-card.tone-neutral{border-left-color:#58738d}
+.source-card.tone-neutral .card-label{
+    background:#e9eef3;color:#40586f;border-left-color:#58738d
+}
+
 th{background:#dfe7ee;color:var(--navy);border-right:1px solid #c6d0d9;border-bottom:2px solid #9cacb9;text-transform:none;font-size:11px}th:last-child{border-right:0}.direction-pill{min-width:54px;text-align:center;border:1px solid transparent}.direction-up{background:#e4f3e8;color:#176a3a;border-color:#b9dcc4}.direction-neutral{background:#e3eef7;color:#075a91;border-color:#bdd3e4}.direction-down{background:#f8e4e7;color:#a51f31;border-color:#e4bcc3}
 footer{border-top:4px solid var(--red)}.footer-main{grid-template-columns:1.35fr .88fr .88fr 1.15fr;gap:48px;padding-top:50px;padding-bottom:40px}.footer-brand-block{display:grid;grid-template-columns:96px minmax(0,1fr);gap:22px;align-items:center}.footer-seal-small{width:92px;height:92px;border-radius:50%;background:var(--seal-image) center/cover no-repeat;box-shadow:0 0 0 5px rgba(255,255,255,.045),0 0 0 6px rgba(196,167,95,.34)}.footer-tagline{font-size:13px;line-height:1.65}.footer-col p{line-height:1.8}.footer-scope{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#081b33;border-top:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12)}.footer-scope div{padding:19px 24px;border-right:1px solid rgba(255,255,255,.15);color:#fff;font:700 11px/1.4 Arial,sans-serif;letter-spacing:.11em}.footer-scope div:last-child{border-right:0}.footer-scope small{color:#9aaabd;
 font-size:11px;
@@ -996,8 +1023,4 @@ def render_report(context: dict) -> str:
 <section id="market-focus"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_market"))}>六｜事件焦点</h2><small>MARKET FOCUS</small></div><div class="source-grid media-grid">{_source_cards(context,'media')}</div></section>
 <section id="forecast"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_forecast"))}>七｜预测验证</h2><small>FORECAST &amp; REVIEW</small></div><p class="prediction-note"{_i18n_attr(_static_i18n("prediction_note"))}>判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。</p>{_predictions(context)}</section>
 <aside class="integrity"><span class="integrity-title"{_i18n_attr(_static_i18n("data_integrity"))}>数据完整性</span><div class="{audit_class}"{_i18n_attr(integrity_i18n)}>{esc(integrity_zh)}</div><div class="metrics"><span{_i18n_attr(_static_i18n("coverage"))}>覆盖率</span> <strong>{context.get('market_coverage',0):.0%}</strong><span{_i18n_attr(_static_i18n("frozen"))}>冻结</span> <strong>{context.get('predictions_frozen',0)}</strong><span{_i18n_attr(_static_i18n("sources"))}>来源</span> <strong>{len(context.get('sources',[]))}</strong></div></aside>
-</main><footer><div class="wrap footer-main"><div class="footer-brand-block"><div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div><div><div class="footer-brand">NEWS FINANCE</div><div class="footer-tagline">Independent research for a clearer view of macro events, capital flows and equity decisions.</div></div></div><div class="footer-col"><h3>MARKET INTELLIGENCE</h3><p>Macro Outlook<br>Capital Flow<br>Sector Rotation<br>Equity Actions</p></div><div class="footer-col"><h3>RESEARCH FRAMEWORK</h3><p{_i18n_attr(_static_i18n("footer_framework"))}>官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</p></div><div class="footer-col"><h3>DISCLOSURE</h3><p{_i18n_attr(_static_i18n("disclosure"))}>独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益保证或证券买卖承诺。</p></div></div><div class="wrap footer-scope">
-<div>RESEARCH AREAS<small>Economy · Rates · Risk · Markets</small></div>
-<div>ANALYTICAL METHOD<small>Data · Evidence · Historical Context</small></div>
-<div>DECISION PROCESS<small>Monitor · Evaluate · Review</small></div>
-</div><div class="wrap footer-bottom"><span>NEWS FINANCE · INDEPENDENT MARKET RESEARCH</span><span>PUBLIC INFORMATION · NON-GOVERNMENT WEBSITE · {esc(report_date)}</span></div></footer>{script}</body></html>"""
+</main><footer><div class="wrap footer-main"><div class="footer-brand-block"><div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div><div><div class="footer-brand">NEWS FINANCE</div><div class="footer-tagline">Independent research for a clearer view of macro events, capital flows and equity decisions.</div></div></div><div class="footer-col"><h3>MARKET INTELLIGENCE</h3><p>Macro Outlook<br>Capital Flow<br>Sector Rotation<br>Equity Actions</p></div><div class="footer-col"><h3>RESEARCH FRAMEWORK</h3><p{_i18n_attr(_static_i18n("footer_framework"))}>官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</p></div><div class="footer-col"><h3>DISCLOSURE</h3><p{_i18n_attr(_static_i18n("disclosure"))}>独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益
