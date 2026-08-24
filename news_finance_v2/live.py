@@ -862,6 +862,9 @@ class HttpCollector:
             return {"name": name, "url": url, "kind": "company_news", "symbol": symbol, "core": False, "status": "NETWORK_ERROR", "text": "", "message": str(exc)}
 
 
+# Multilingual display fields:
+# base = Simplified Chinese; suffixes = zh_tw/en/bg/ru/ja/ko/fr/de/es/th.
+# Analysis call count is unchanged; translations are returned in the same three AI calls.
 class OpenAIAnalyzer:
     def __init__(self, settings: Settings, *, client=None):
         self.settings = settings
@@ -975,6 +978,24 @@ class OpenAIAnalyzer:
 11. 中文禁止套话：值得关注、密切留意、市场正在关注、可能产生一定影响、从某种程度上、整体来看、需要注意的是；英文也禁止对应空话。
 12. 结论先行；少形容词、少铺垫、少重复。
 
+
+多语言输出（必须执行）：
+- 默认无后缀字段仍为中文简体，是唯一主判断。
+- 所有面向读者的文本字段，除现有 `_en` 外，还必须同步输出：
+  `_zh_tw` 中文繁体、`_bg` 保加利亚语、`_ru` 俄语、`_ja` 日语、
+  `_ko` 韩语、`_fr` 法语、`_de` 德语、`_es` 西班牙语、`_th` 泰语。
+- 翻译顺序/语言代码固定：
+  zh（中文简体，无后缀）→ zh_tw → en → bg → ru → ja → ko → fr → de → es → th。
+- 这些字段只是同一投资判断的本地化表达，不是重新分析：
+  数字、方向、概率、资产代码、日期、触发条件、失效条件必须完全一致。
+- 各语言都保持“高信息密度、惜字如金”；使用当地自然的金融研究表达，不做生硬逐字翻译。
+- ticker、target、focus、source、sources、sensors、evidence_ids 不翻译。
+- 对数组 actions，除 `actions` / `actions_en` 外，还必须输出：
+  `actions_zh_tw`、`actions_bg`、`actions_ru`、`actions_ja`、`actions_ko`、
+  `actions_fr`、`actions_de`、`actions_es`、`actions_th`；
+  每个语言版本的 watch / prepare / avoid 数量、顺序、标的一一对应。
+- 若某专有名词在目标语言中没有稳定译名，保留常用英文名，不臆造。
+
 direction：
 - title 12-24字，直写核心矛盾；title_en为同义精炼英文标题。
 - brief 70-100字：串联2-4个关键变量，必须含“主线 + 关键验证点”；brief_en表达完全相同的信息。
@@ -1026,10 +1047,11 @@ predictions：
 """
 
         system_prompt = (
-            "你是中英双语跨资产首席研究员兼信息编辑。"
-            "先形成唯一投资判断，再用高密度中文和专业英文表达同一判断；英文不是第二次分析。"
+            "你是多语种跨资产首席研究员兼信息编辑。"
+            "先用中文简体形成唯一投资判断，再将同一判断本地化为中文繁体、英语、保加利亚语、俄语、"
+            "日语、韩语、法语、德语、西班牙语和泰语；任何语言都不是第二次分析。"
             "事实优先、数字优先、因果优先、动作优先；惜字如金，删除铺垫、套话、重复和无效形容词。"
-            "中英文事实、方向、动作、触发和失效条件必须一致。"
+            "所有语言的事实、方向、动作、触发和失效条件必须一致。"
             "只依据输入证据，不承诺收益，严格输出JSON。"
         )
         parsed = self._complete_json("master", system_prompt, prompt)
@@ -1060,11 +1082,15 @@ predictions：
 12. 中英文必须共享同一 target、direction、probability、sensors、evidence_ids；不得出现方向不一致。
 13. 周期仅3/5/10/15；概率0.50-0.80。
 14. 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
+
+15. 对 `thesis` 与 `invalidation`，除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
+16. 所有语言共享同一 horizon_days、target、direction、probability、sensors、evidence_ids；仅翻译展示文本。
+17. 各语言保持高信息密度，不增加中文没有的事实。
 """
         prediction_system = (
-            "你是中英双语跨资产预测负责人。先形成唯一预测，再输出中文与对应英文。"
+            "你是多语种跨资产预测负责人。先形成唯一中文预测，再把同一预测翻译为所要求的十种其他语言。"
             "结论必须短、硬、可验证：量化状态→催化→方向→失效条件。"
-            "英文不得改变中文方向或增加事实；拒绝套话和重复，严格输出JSON。"
+            "任何语言都不得改变方向、数字或增加事实；拒绝套话和重复，严格输出JSON。"
         )
         prediction_result = self._complete_json(
             "cross_asset_predictions", prediction_system, prediction_prompt
@@ -1147,12 +1173,17 @@ predictions：
 18. source必须是真实输入来源；只有媒体消息时，中文brief与英文brief_en都保留同等“据报道/尚待确认”限定。
 19. 中英文都能用短句不用长句；删除公司背景、行业科普、重复评价。
 20. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
+
+21. company / stance / brief / trigger / risk 除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
+22. company 的各语言版本可使用该市场最常见的公司名称；无法可靠本地化时保留英文公司名或ticker。
+23. 所有语言的 stance 必须与中文完全一致；只翻译表达，不重新判断。
 """
             company_system = (
-                "你是中英双语美股研究负责人。候选已通过量价和新闻初筛。"
-                "先形成唯一股票判断，再分别输出高密度中文与专业英文；英文不是第二次分析。"
+                "你是多语种美股研究负责人。候选已通过量价和新闻初筛。"
+                "先形成唯一中文股票判断，再将同一判断本地化为中文繁体、英语、保加利亚语、俄语、"
+                "日语、韩语、法语、德语、西班牙语和泰语；翻译不是第二次分析。"
                 "每只股票按“事实/催化→市场含义→动作→触发→失效”压缩表达。"
-                "中英文事实、stance、trigger、risk必须一致；惜字如金，不写公司介绍，不把涨幅榜当精选榜。"
+                "所有语言的事实、stance、trigger、risk必须一致；惜字如金，不写公司介绍，不把涨幅榜当精选榜。"
                 "只依据输入证据，严格输出JSON。"
             )
             company_result = self._complete_json("company", company_system, company_prompt)
