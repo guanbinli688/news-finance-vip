@@ -111,6 +111,202 @@ def parse_ics_events(text: str, *, start: date | None = None, days: int = 14):
     return sorted(events, key=lambda item: (item["date"], item["title"]))
 
 
+# -------------------------------------------------------------------
+# Market calendar: "有日程" != "值得交易".
+# The raw BLS calendar is retained as evidence, but low-impact releases
+# are removed from the displayed market calendar unless AI finds a
+# stronger reason to keep them.
+# -------------------------------------------------------------------
+
+_MAJOR_CALENDAR_KEYWORDS = (
+    # Inflation / growth / labor
+    "consumer price index", "cpi",
+    "producer price index", "ppi",
+    "personal income and outlays", "pce",
+    "gross domestic product", "gdp",
+    "employment situation", "nonfarm", "payroll",
+    "job openings and labor turnover", "jolts",
+    "retail sales", "ism", "pmi",
+    "employment cost index",
+    "consumer sentiment", "inflation expectations",
+    # Fed / rates
+    "fomc", "federal reserve", "fed chair", "chair powell",
+    "chair warsh", "jackson hole", "minutes",
+    "treasury auction", "10-year", "30-year",
+    # Energy / policy / geopolitical
+    "opec", "sanction", "tariff", "white house",
+    "treasury secretary", "ustr", "state department",
+    # Earnings / corporate catalysts
+    "earnings", "quarterly results", "financial results",
+    "investor day", "guidance", "conference call",
+)
+
+_LOW_VALUE_BLS_KEYWORDS = (
+    "summer youth labor force",
+    "access to and use of leave",
+    "employment projections and occupational outlook handbook",
+    "worker displacement",
+    "county employment and wages",
+    "current employment statistics preliminary benchmark",
+    "metropolitan area employment and unemployment",
+    "occupational employment and wage statistics",
+    "business employment dynamics",
+)
+
+
+def _is_market_relevant_raw_event(title: str) -> bool:
+    normalized = " ".join(str(title or "").lower().split())
+    if not normalized:
+        return False
+    if any(key in normalized for key in _LOW_VALUE_BLS_KEYWORDS):
+        return False
+    return any(key in normalized for key in _MAJOR_CALENDAR_KEYWORDS)
+
+
+def _filter_raw_calendar_events(events, *, start: date, days: int = 14):
+    """Fallback filter used when AI does not produce a reliable calendar."""
+    end = start + timedelta(days=days)
+    selected = []
+    seen = set()
+
+    for item in events or []:
+        try:
+            event_date = date.fromisoformat(str(item.get("date", ""))[:10])
+        except ValueError:
+            continue
+        if not (start <= event_date < end):
+            continue
+
+        title = str(item.get("title") or "").strip()
+        source = str(item.get("source") or "").strip() or "官方来源"
+        if not _is_market_relevant_raw_event(title):
+            continue
+
+        key = (event_date.isoformat(), re.sub(r"\W+", "", title.lower()))
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append({
+            "date": event_date.isoformat(),
+            "title": title,
+            "source": source,
+        })
+
+    return sorted(selected, key=lambda x: (x["date"], x["title"]))
+
+
+def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, days: int = 14):
+    """
+    Normalize AI-selected high-impact events for the existing calendar UI.
+
+    Contract intentionally stays unchanged:
+      {"date": "YYYY-MM-DD", "title": "...", "source": "..."}
+
+    Extra AI fields such as importance/category are discarded before display.
+    """
+    end = start + timedelta(days=days)
+    normalized = []
+    seen = set()
+    per_day = {}
+
+    if not isinstance(ai_events, list):
+        ai_events = []
+
+    for item in ai_events:
+        if not isinstance(item, dict):
+            continue
+        try:
+            event_date = date.fromisoformat(str(item.get("date", ""))[:10])
+        except ValueError:
+            continue
+        if not (start <= event_date < end):
+            continue
+
+        title = " ".join(str(item.get("title") or "").split()).strip()
+        source = " ".join(str(item.get("source") or "").split()).strip()
+        if not title or not source:
+            continue
+
+        try:
+            importance = int(float(item.get("importance", 0)))
+        except (TypeError, ValueError):
+            importance = 0
+
+        # A calendar item must clear a meaningful market-impact threshold.
+        # This prevents "official but irrelevant" releases from filling the grid.
+        if importance < 65:
+            continue
+
+        normalized_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
+        key = (event_date.isoformat(), normalized_key)
+        if key in seen:
+            continue
+
+        # Avoid one busy day swallowing the whole calendar.
+        day_key = event_date.isoformat()
+        if per_day.get(day_key, 0) >= 3:
+            continue
+
+        seen.add(key)
+        per_day[day_key] = per_day.get(day_key, 0) + 1
+        normalized.append({
+            "date": day_key,
+            "title": title,
+            "source": source,
+            "_importance": importance,
+        })
+
+    # AI list is expected to be ranked, but enforce deterministic sorting:
+    # date first, then higher importance first.
+    normalized.sort(key=lambda x: (x["date"], -x["_importance"], x["title"]))
+
+    if normalized:
+        return [
+            {"date": x["date"], "title": x["title"], "source": x["source"]}
+            for x in normalized
+        ]
+
+    # If AI cannot establish any reliable dated event, show only genuinely
+    # market-relevant official raw events; blank dates are preferable to filler.
+    return _filter_raw_calendar_events(raw_events, start=start, days=days)
+
+
+def _calendar_company_evidence(compact_sources, limit: int = 18):
+    """
+    Feed the master pass only company material likely to contain a scheduled,
+    market-moving catalyst. This lets earnings / investor days compete with
+    macro events without dumping the whole stock universe into the prompt.
+    """
+    event_words = (
+        "earnings", "financial results", "quarterly results", "conference call",
+        "webcast", "investor day", "guidance", "reports results",
+        "财报", "业绩", "电话会议", "投资者日", "指引",
+    )
+
+    selected = []
+    for item in compact_sources or []:
+        if item.get("kind") not in {"company", "company_news"}:
+            continue
+        if item.get("status") != "SUCCESS":
+            continue
+        body = str(item.get("text") or "")
+        if not body:
+            continue
+        lowered = body.lower()
+        if not any(word in lowered for word in event_words):
+            continue
+        selected.append({
+            "name": item.get("name"),
+            "kind": item.get("kind"),
+            "symbol": item.get("symbol"),
+            "status": item.get("status"),
+            "text": body[:850],
+        })
+        if len(selected) >= limit:
+            break
+    return selected
+
+
 def _default_market_loader(symbols):
     import yfinance as yf
     result = {}
@@ -992,10 +1188,18 @@ class OpenAIAnalyzer:
             item for item in compact_sources
             if item.get("kind") in {"official", "media"}
         ]
+        calendar_company_sources = _calendar_company_evidence(compact_sources)
+
         prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
         prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
+        prompt += "\n原始未来14日官方日程候选（只作候选，禁止照单全收）：\n" + json.dumps(
+            collected.get("events", []), ensure_ascii=False
+        )
+        prompt += "\n可能包含财报/投资者日等明确日期的公司证据：\n" + json.dumps(
+            calendar_company_sources, ensure_ascii=False
+        )
         prompt += """
 \n请生成中文机构晨报所需的完整 JSON：
 {
@@ -1025,6 +1229,9 @@ class OpenAIAnalyzer:
     "impact":"","impact_en":"",
     "sources":[]
   }],
+  "events":[
+    {"date":"YYYY-MM-DD","title":"高影响事件短标题","source":"输入中的真实来源名","importance":90,"category":"宏观|Fed|财报|政策|地缘|跨资产"}
+  ],
   "predictions":[{
     "horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,
     "thesis":"","thesis_en":"",
@@ -1105,6 +1312,24 @@ media_themes：
 - sources 仅列真实支持该主题的输入来源，来源名保持原文。
 - 一个主题只讲一件事。
 
+events（这是“未来14日日历”的最终展示事件，必须严筛）：
+- 日历形式不变，但禁止“为了填格子而填格子”；没有高影响事件的日期可以留空。
+- 只选输入证据中明确给出未来日期、且可能显著影响美股/美债/美元/黄金/原油/主要行业的事件。
+- 最多12项；单日最多3项；按市场重要性排序并给 importance 0-100。
+- importance < 65 的事件不要输出。
+- 优先级：
+  A级：FOMC、Fed主席/杰克逊霍尔、CPI、核心PCE、非农、GDP、重大关税/制裁/政策节点；
+  B级：PPI、零售销售、ISM/JOLTS/消费者通胀预期、10Y/30Y国债拍卖、OPEC+、大型权重股/行业龙头财报；
+  C级：只有在当前市场主线高度相关时才保留其他官方数据。
+- 大型公司财报只有在输入中存在明确日期证据时才能进入；禁止凭记忆补财报日期。
+- 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入。
+- BLS的普通统计发布不是天然重要。明确排除：暑期青年劳动力、休假获取与使用、职业展望手册、县级就业工资、初步基准等低交易价值项目。
+- 同一事件多来源重复时只保留一项；优先 source：官方机构 > 公司IR > Reuters/FT/AP/CNBC等主流媒体。
+- title 只写“事件本身”，建议10-24字；不要在日历标题里写影响分析。
+- source 必须逐字使用输入里真实存在的来源名，不得虚构来源。
+- date 必须是 YYYY-MM-DD 且位于报告日开始的未来14日内；没有明确日期就不输出。
+- 宁可某天显示“暂无已确认事件”，也不要塞入低价值日程。
+
 predictions：
 - 周期仅3/5/10/15，概率0.50-0.80。
 - target / direction / probability / sensors / evidence_ids为中英文共用结构。
@@ -1127,6 +1352,17 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
             "只依据输入证据，不承诺收益，严格输出JSON。"
         )
         parsed = self._complete_json("master", system_prompt, prompt)
+
+        # Calendar stays exactly the same visually. Only replace its event list
+        # with a high-impact, evidence-backed selection.
+        curated_events = _normalize_market_calendar_events(
+            parsed.get("events", []),
+            collected.get("events", []),
+            start=self.settings.report_date,
+            days=14,
+        )
+        parsed["events"] = curated_events
+        collected["events"] = curated_events
 
         prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prediction_prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
