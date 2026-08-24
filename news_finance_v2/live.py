@@ -900,7 +900,15 @@ class OpenAIAnalyzer:
         for record in collected.get("sources", []):
             text = " ".join(str(record.get("text", "")).split())
             kind = record.get("kind")
-            limit = 1200 if kind == "company" else (700 if kind == "company_news" else 900)
+            # 高密度版：增加证据输入，输出仍要求惜字如金。
+            if kind == "company":
+                limit = 1800
+            elif kind == "company_news":
+                limit = 1000
+            elif kind == "official":
+                limit = 1600
+            else:
+                limit = 1200
             compact_sources.append({
                 "name": record.get("name"), "kind": kind,
                 "symbol": record.get("symbol") or COMPANY_SYMBOLS.get(record.get("name")),
@@ -929,9 +937,70 @@ class OpenAIAnalyzer:
   "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","impact":"","sources":[]}],
   "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
 }
-约束：只输出 JSON；除股票代码和来源名外，展示文案全部使用简体中文；表达应细腻、克制、专业，结论明确但不过度武断；禁止复制网页导航、菜单、公司介绍或英文原文；direction.brief 不超过70字；horizons 必须正好三项，每项 brief 不超过45字、focus 最多3个标的；actions 每组最多3项，每项必须写“标的＋动作＋触发条件”，不写空泛口号；flows 最多3项；flows表示“相对配置倾向/可能轮动”，除非输入有直接资金流证据，否则不得声称已经发生真实资金流；logic 最多4项；media_themes 最多3项，每项必须说明投资含义；预测周期只能 3/5/10/15；概率 0.50-0.80；绝对方向 UP/DOWN/NEUTRAL，相对方向 OUTPERFORM/UNDERPERFORM/NEUTRAL；没有优势就写“等待确认”。
+
+总原则：高信息密度，惜字如金。不是“写长”，而是“每句话都有用”。
+
+写作纪律：
+1. 只输出JSON；除股票代码、来源名外，全部简体中文。
+2. 只依据输入证据；禁止补造数字、时间、人物、预期或新闻。
+3. 未经官方确认的信息写“据报道/尚待确认/市场传闻”，不得写成既定事实。
+4. 每句话至少承担一项功能：事实、数字、预期差、因果、资产影响、触发条件；没有功能就删。
+5. 优先结构：“事件/数据 → 预期差 → 传导 → 资产”；能用40字说清，不写80字。
+6. 同一事实只出现一次；不同模块不得反复复述同一结论。
+7. 禁止套话：值得关注、密切留意、市场正在关注、可能产生一定影响、从某种程度上、整体来看、需要注意的是。
+8. 结论先行；少形容词、少铺垫、少重复。
+
+direction：
+- title 12-24字，直写核心矛盾。
+- brief 70-100字：串联2-4个关键变量，必须含“主线 + 关键验证点”；不列新闻清单。
+- bias 只给最终倾向。
+
+horizons：
+- 正好三项：3-5、5-10、10-15。
+- brief 50-75字：判断→核心依据→确认条件。
+- risk 30-50字：只写最关键失效条件。
+- focus 最多4个，只留真正相关标的。
+
+actions：
+- watch / prepare / avoid 每组最多4项。
+- 每项35-55字，尽量用“标的：动作；原因；触发/停止条件”。
+- 禁止空泛“等待观察”；必须说明等什么。
+
+flows：
+- 最多4项；brief 35-55字。
+- 仅表示相对配置倾向/潜在轮动；没有直接资金流证据，不得声称真实资金已经迁移。
+- 必须解释A为何弱/强、B为何受益/承压。
+
+logic：
+- 最多6项；宁缺毋滥。
+- cause / middle / result / action 各写一个信息点。
+- 每项形成“事实/催化 → 中间变量 → 资产结果 → 动作”。
+- 优先覆盖真正有证据的利率、美元、通胀/商品、风险偏好、市场宽度、行业轮动、海外市场。
+
+media_themes：
+- 最多5项；优先“即将落地的硬事件 + 正在发酵的暗线”。
+- title 12-28字，直接写事件。
+- brief 50-80字：事实 + 关键数字/状态 + 预期差；禁止背景科普。
+- impact 35-60字：传导链 + 受影响资产 + 下一验证点。
+- sources 仅列真实支持该主题的输入来源。
+- 一个主题只讲一件事。
+
+predictions：
+- 周期仅3/5/10/15，概率0.50-0.80。
+- 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
+- thesis 必须是“证据→方向”的短因果链；invalidation 必须可观察。
+- 没有优势写“等待确认”，不硬凑方向。
+
+最终自检：
+删掉任何不影响结论的句子；删掉重复观点；删掉没有事实、数字、因果或动作的句子。
 """
-        system_prompt = "你是成熟、克制且措辞温和的中文跨资产投资研究员。只依据输入证据，先给动作再解释原因，不承诺收益。严格输出JSON。"
+
+        system_prompt = (
+            "你是中文跨资产首席研究员兼信息编辑。"
+            "把大量证据压缩成高密度研究结论：事实优先、数字优先、因果优先、动作优先。"
+            "惜字如金；删除铺垫、套话、重复和无效形容词。"
+            "每句话都要提供新信息。只依据输入证据，不承诺收益，严格输出JSON。"
+        )
         parsed = self._complete_json("master", system_prompt, prompt)
 
         prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
@@ -953,11 +1022,17 @@ class OpenAIAnalyzer:
 5. 不要机械重复 SPY、QQQ/SPY、XLF/SPY、XLE/SPY、TLT；如果其他行业、海外市场、商品或信用出现更强证据，应主动替换。
 6. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
 7. 不得4项全部表达同一方向或同一风险因子；优先保持跨资产分散。
-8. 必须优先参考1日/5日/20日变化、20日波动率和MA20位置，再结合新闻与政策证据；不因标的知名度高而优先。
-9. 周期只能3/5/10/15；概率0.50-0.80；每项必须有简洁中文逻辑、可观察失效条件和证据编号。
-10. 绝对方向使用UP/DOWN/NEUTRAL；相对方向使用OUTPERFORM/UNDERPERFORM/NEUTRAL。
+8. 必须优先参考1日/5日/20日变化、20日波动率、MA20位置，再结合新闻/政策；不因知名度高而优先。
+9. thesis 45-70字：只写“量化状态 + 催化/宏观变量 → 方向”；不得复述市场背景。
+10. invalidation 25-45字：必须可观察；sensors优先2-3个真正能验证判断的变量。
+11. 每项至少包含一个输入中的量化状态或具体事件，不写纯主观判断。
+12. 周期仅3/5/10/15；概率0.50-0.80。
+13. 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
 """
-        prediction_system = "你是跨资产预测负责人。以分散、可验证和可复盘为首要原则，严格输出JSON。"
+        prediction_system = (
+            "你是跨资产预测负责人。结论必须短、硬、可验证："
+            "量化状态→催化→方向→失效条件。拒绝套话和重复，严格输出JSON。"
+        )
         prediction_result = self._complete_json(
             "cross_asset_predictions", prediction_system, prediction_prompt
         )
@@ -1021,13 +1096,19 @@ class OpenAIAnalyzer:
 8. setup_type=risk_breakdown 且存在基本面或事件利空时，应优先考虑“回避”，不能机械抄底。
 9. “等待”用于方向尚可但价格、成交量或事件确认不足的股票；不要因为措辞保守而把所有股票都写成“等待”。
 10. 若候选中确有满足条件的机会，优先给出2-4只行业分散的“关注”；若存在明确破位/重大利空，也应给出1-2只“回避”。没有合格对象时可以不凑数量。
-11. 不能只凭网站介绍或单条媒体标题；公司官网页面若只有宣传性内容，不得作为主要论据。
-12. 每家公司结论必须不同，brief不超过55字，trigger和risk各不超过35字。
-13. 不编造买卖价格，不承诺收益，不为了凑数量牺牲证据质量。
+11. 不能只凭网站介绍或单条媒体标题；公司官网若只有宣传性内容，不得作为主要论据。
+12. brief 65-85字，固定顺序：“核心事实/催化 → 价格或基本面含义 → 当前动作”。至少包含一个具体事实；有关键数字时优先引用。
+13. trigger 30-45字，只写升级/执行所需的可观察条件；禁止“等待进一步确认”这类空话。
+14. risk 30-45字，只写最可能使当前逻辑失效的风险；不同公司不得复制同一句风险。
+15. source必须是真实输入来源；只有媒体消息时，brief保留“据报道/尚待确认”。
+16. 能用短句不用长句；删除公司背景、行业科普、重复评价。
+17. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
 """
             company_system = (
-                "你是中文美股研究负责人。你面对的是已经通过量价和新闻初筛的候选池。"
-                "你的任务是做最后一轮精挑细选，而不是偏爱熟悉的大公司或当日涨幅最大的股票。"
+                "你是中文美股研究负责人。候选已通过量价和新闻初筛。"
+                "只保留最有增量信息、风险收益比和动作价值的股票。"
+                "每只股票按“事实/催化→市场含义→动作→触发→失效”压缩表达；"
+                "惜字如金，不写公司介绍，不把涨幅榜当精选榜。"
                 "只依据输入证据，严格输出JSON。"
             )
             company_result = self._complete_json("company", company_system, company_prompt)
