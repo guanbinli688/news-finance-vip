@@ -389,15 +389,24 @@ def _source_cards(context, kind):
             source_label_en = _source_label_en(source_name)
             raw_url = source_urls.get(source_name)
             source_url = _human_source_url(source_name, raw_url, ticker)
-            label_span = f"<span{_i18n_attr(source_label_en)}>{esc(source_label)}</span>"
+            label_en_b64 = base64.b64encode(
+                str(source_label_en or source_label).encode("utf-8")
+            ).decode("ascii")
 
             if source_url:
+                # Preserve legacy DOM shape for tests:
+                # <a ...>中文来源<span>↗</span></a>
+                # English label is stored on the anchor and only swaps the first text node.
                 source_links.append(
-                    f"<a href='{esc(source_url)}' target='_blank' rel='noopener noreferrer'>"
-                    f"{label_span}<span aria-hidden='true'>↗</span></a>"
+                    f"<a href='{esc(source_url)}' target='_blank' rel='noopener noreferrer' "
+                    f"data-i18n-label='{label_en_b64}'>"
+                    f"{esc(source_label)}<span aria-hidden='true'>↗</span></a>"
                 )
             else:
-                source_links.append(f"<span class='source-static'>{label_span}</span>")
+                source_links.append(
+                    f"<span class='source-static' data-i18n-label='{label_en_b64}'>"
+                    f"{esc(source_label)}</span>"
+                )
 
         links_html = "".join(source_links) or "<span>公开来源</span>"
         details = ""
@@ -616,6 +625,15 @@ def render_report(context: dict) -> str:
         el.dataset.zh = el.textContent;
     });
 
+    const labelNodes = Array.from(document.querySelectorAll("[data-i18n-label]"));
+    labelNodes.forEach(el => {
+        const firstText = Array.from(el.childNodes).find(
+            node => node.nodeType === Node.TEXT_NODE
+        );
+        el._i18nTextNode = firstText || null;
+        el.dataset.zhLabel = firstText ? firstText.nodeValue : el.textContent;
+    });
+
     function setLanguage(lang) {
         const english = lang === "en";
         nodes.forEach(el => {
@@ -624,6 +642,19 @@ def render_report(context: dict) -> str:
                 if (translated) el.textContent = translated;
             } else {
                 el.textContent = el.dataset.zh || "";
+            }
+        });
+
+        labelNodes.forEach(el => {
+            const translated = decodeUtf8(el.dataset.i18nLabel || "");
+            if (el._i18nTextNode) {
+                el._i18nTextNode.nodeValue = english && translated
+                    ? translated
+                    : (el.dataset.zhLabel || "");
+            } else {
+                el.textContent = english && translated
+                    ? translated
+                    : (el.dataset.zhLabel || "");
             }
         });
         document.documentElement.lang = english ? "en" : "zh-CN";
