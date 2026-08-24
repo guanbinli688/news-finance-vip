@@ -141,43 +141,43 @@ UI_I18N = {
         "th": "การวิเคราะห์การลงทุนทั่วโลกแบบขับเคลื่อนด้วยเหตุการณ์ · Daily Investment Briefing",
     },
     "section_direction": {
-        "zh_tw": "一｜今日投資方向", "en": "1 | Market Direction", "bg": "1 | Пазарна посока",
+        "zh_tw": "一｜市場定調", "en": "1 | Market Tone", "bg": "1 | Пазарна посока",
         "ru": "1 | Направление рынка", "ja": "1｜本日の投資方針", "ko": "1 | 오늘의 투자 방향",
         "fr": "1 | Orientation du marché", "de": "1 | Marktrichtung",
         "es": "1 | Dirección del mercado", "th": "1 | ทิศทางตลาดวันนี้",
     },
     "section_action": {
-        "zh_tw": "二｜具體動作", "en": "2 | Action Agenda", "bg": "2 | План за действия",
+        "zh_tw": "二｜策略動作", "en": "2 | Strategy Actions", "bg": "2 | План за действия",
         "ru": "2 | План действий", "ja": "2｜具体的な対応", "ko": "2 | 구체적 대응",
         "fr": "2 | Plan d’action", "de": "2 | Handlungsplan",
         "es": "2 | Plan de acción", "th": "2 | แผนการดำเนินการ",
     },
     "section_calendar": {
-        "zh_tw": "三｜未來14日重要日程", "en": "3 | 14-Day Economic Calendar", "bg": "3 | Календар за 14 дни",
+        "zh_tw": "三｜關鍵日曆", "en": "3 | Key Calendar", "bg": "3 | Календар за 14 дни",
         "ru": "3 | Календарь на 14 дней", "ja": "3｜今後14日間の重要日程", "ko": "3 | 향후 14일 주요 일정",
         "fr": "3 | Calendrier des 14 prochains jours", "de": "3 | 14-Tage-Kalender",
         "es": "3 | Calendario de 14 días", "th": "3 | ปฏิทินสำคัญ 14 วัน",
     },
     "section_flow": {
-        "zh_tw": "四｜資金流向與投資邏輯", "en": "4 | Capital Flow & Investment Logic", "bg": "4 | Капиталови потоци и логика",
+        "zh_tw": "四｜資金路徑", "en": "4 | Capital Path", "bg": "4 | Капиталови потоци и логика",
         "ru": "4 | Потоки капитала и логика", "ja": "4｜資金フローと投資ロジック", "ko": "4 | 자금 흐름과 투자 논리",
         "fr": "4 | Flux de capitaux et logique", "de": "4 | Kapitalflüsse und Logik",
         "es": "4 | Flujos de capital y lógica", "th": "4 | กระแสเงินทุนและตรรกะการลงทุน",
     },
     "section_equity": {
-        "zh_tw": "五｜重點公司前瞻", "en": "5 | Equity Watchlist", "bg": "5 | Компании на фокус",
+        "zh_tw": "五｜個股雷達", "en": "5 | Equity Radar", "bg": "5 | Компании на фокус",
         "ru": "5 | Компании в фокусе", "ja": "5｜注目企業", "ko": "5 | 주요 기업 전망",
         "fr": "5 | Sociétés à surveiller", "de": "5 | Aktien-Watchlist",
         "es": "5 | Empresas a seguir", "th": "5 | บริษัทที่ต้องจับตา",
     },
     "section_market": {
-        "zh_tw": "六｜市場正在交易什麼", "en": "6 | What the Market Is Trading", "bg": "6 | Какво търгува пазарът",
+        "zh_tw": "六｜事件焦點", "en": "6 | Event Focus", "bg": "6 | Какво търгува пазарът",
         "ru": "6 | Что торгует рынок", "ja": "6｜市場が織り込むテーマ", "ko": "6 | 시장이 거래하는 테마",
         "fr": "6 | Ce que traite le marché", "de": "6 | Was der Markt handelt",
         "es": "6 | Qué está negociando el mercado", "th": "6 | สิ่งที่ตลาดกำลังซื้อขาย",
     },
     "section_forecast": {
-        "zh_tw": "七｜預測與驗證", "en": "7 | Forecast & Review", "bg": "7 | Прогноза и проверка",
+        "zh_tw": "七｜預測驗證", "en": "7 | Forecast Validation", "bg": "7 | Прогноза и проверка",
         "ru": "7 | Прогноз и проверка", "ja": "7｜予測と検証", "ko": "7 | 전망과 검증",
         "fr": "7 | Prévisions et validation", "de": "7 | Prognose und Überprüfung",
         "es": "7 | Pronóstico y validación", "th": "7 | การคาดการณ์และการตรวจสอบ",
@@ -193,28 +193,28 @@ UI_I18N = {
         "es": "Preparar", "th": "เตรียม",
     },
     "avoid": {
-        "zh_tw": "迴避 / 降低風險", "en": "Avoid / Reduce Risk", "bg": "Избягване / Намаляване на риска",
+        "zh_tw": "規避", "en": "Avoid", "bg": "Избягване / Намаляване на риска",
         "ru": "Избегать / Снизить риск", "ja": "回避 / リスク低減", "ko": "회피 / 위험 축소",
         "fr": "Éviter / Réduire le risque", "de": "Meiden / Risiko reduzieren",
         "es": "Evitar / Reducir riesgo", "th": "หลีกเลี่ยง / ลดความเสี่ยง",
     },
     "driver": {
-        "zh_tw": "起點", "en": "Driver", "bg": "Двигател", "ru": "Драйвер",
+        "zh_tw": "驅動", "en": "Driver", "bg": "Двигател", "ru": "Драйвер",
         "ja": "起点", "ko": "출발점", "fr": "Moteur", "de": "Treiber",
         "es": "Impulsor", "th": "ปัจจัยขับเคลื่อน",
     },
     "transmission": {
-        "zh_tw": "傳導", "en": "Transmission", "bg": "Предаване", "ru": "Передача",
+        "zh_tw": "路徑", "en": "Path", "bg": "Предаване", "ru": "Передача",
         "ja": "波及", "ko": "전이", "fr": "Transmission", "de": "Übertragung",
         "es": "Transmisión", "th": "การส่งผ่าน",
     },
     "outcome": {
-        "zh_tw": "結果", "en": "Outcome", "bg": "Резултат", "ru": "Результат",
+        "zh_tw": "落點", "en": "Outcome", "bg": "Резултат", "ru": "Результат",
         "ja": "結果", "ko": "결과", "fr": "Résultat", "de": "Ergebnis",
         "es": "Resultado", "th": "ผลลัพธ์",
     },
     "investment_action": {
-        "zh_tw": "投資應對", "en": "Action", "bg": "Действие", "ru": "Действие",
+        "zh_tw": "動作", "en": "Action", "bg": "Действие", "ru": "Действие",
         "ja": "投資対応", "ko": "투자 대응", "fr": "Action", "de": "Maßnahme",
         "es": "Acción", "th": "การดำเนินการ",
     },
@@ -252,11 +252,11 @@ UI_I18N = {
         "ko": "기간", "fr": "Horizon", "de": "Horizont", "es": "Horizonte", "th": "กรอบเวลา",
     },
     "table_target": {
-        "zh_tw": "對象", "en": "Target", "bg": "Обект", "ru": "Объект", "ja": "対象",
+        "zh_tw": "標的", "en": "Target", "bg": "Обект", "ru": "Объект", "ja": "対象",
         "ko": "대상", "fr": "Cible", "de": "Ziel", "es": "Objetivo", "th": "เป้าหมาย",
     },
     "table_view": {
-        "zh_tw": "判斷", "en": "View", "bg": "Оценка", "ru": "Оценка", "ja": "判断",
+        "zh_tw": "方向", "en": "Direction", "bg": "Оценка", "ru": "Оценка", "ja": "判断",
         "ko": "판단", "fr": "Vue", "de": "Einschätzung", "es": "Visión", "th": "มุมมอง",
     },
     "table_probability": {
@@ -268,7 +268,7 @@ UI_I18N = {
         "ko": "논리", "fr": "Thèse", "de": "These", "es": "Tesis", "th": "เหตุผล",
     },
     "table_invalidation": {
-        "zh_tw": "失效條件", "en": "Invalidation", "bg": "Условие за невалидност", "ru": "Условие отмены",
+        "zh_tw": "失效", "en": "Invalidation", "bg": "Условие за невалидност", "ru": "Условие отмены",
         "ja": "無効化条件", "ko": "무효 조건", "fr": "Invalidation", "de": "Ungültigkeitsbedingung",
         "es": "Invalidación", "th": "เงื่อนไขยกเลิก",
     },
@@ -487,11 +487,12 @@ def _horizons(context):
             "brief": "证据尚不足。", "risk": "等待新增数据",
         }
         display_days = str(item.get("days", days))
+        display_days_compact = display_days.replace("-", "–")
         focus = " · ".join(str(x) for x in item.get("focus", [])[:5])
 
         time_i18n = {
-            "zh_tw": f"未來 {display_days} 日",
-            "en": f"Next {display_days} Days",
+            "zh_tw": f"{display_days_compact}日",
+            "en": f"{display_days_compact}D",
             "bg": f"Следващи {display_days} дни",
             "ru": f"Следующие {display_days} дней",
             "ja": f"今後 {display_days} 日",
@@ -504,9 +505,9 @@ def _horizons(context):
 
         risk_i18n = {}
         prefixes = {
-            "zh_tw": "風險：", "en": "Risk: ", "bg": "Риск: ", "ru": "Риск: ",
-            "ja": "リスク：", "ko": "위험: ", "fr": "Risque : ", "de": "Risiko: ",
-            "es": "Riesgo: ", "th": "ความเสี่ยง: ",
+            "zh_tw": "失效條件：", "en": "Invalidation: ", "bg": "Условие за невалидност: ", "ru": "Условие отмены: ",
+            "ja": "無効化条件：", "ko": "무효 조건: ", "fr": "Invalidation : ", "de": "Ungültig bei: ",
+            "es": "Invalidación: ", "th": "เงื่อนไขยกเลิก: ",
         }
         risk_fields = _field_i18n(item, "risk")
         for code in LANG_CODES:
@@ -515,11 +516,11 @@ def _horizons(context):
 
         cards.append(
             f"""<div class="horizon">"""
-            f"""<div class="horizon-time"{_i18n_attr(time_i18n)}>未来 {esc(display_days)} 日</div>"""
+            f"""<div class="horizon-time"{_i18n_attr(time_i18n)}>{esc(display_days_compact)}日</div>"""
             f"""<div class="horizon-direction"{_i18n_attr(_field_i18n(item, "direction"))}>{esc(item.get("direction", "等待确认"))}</div>"""
             f"""<div class="focus">{esc(focus)}</div>"""
             f"""<p{_i18n_attr(_field_i18n(item, "brief"))}>{esc(item.get("brief"))}</p>"""
-            f"""<div class="risk"{_i18n_attr(risk_i18n)}>风险：{esc(item.get("risk", "等待确认"))}</div>"""
+            f"""<div class="risk"{_i18n_attr(risk_i18n)}>失效条件：{esc(item.get("risk", "等待确认"))}</div>"""
             f"""</div>"""
         )
     return "".join(cards)
@@ -593,15 +594,15 @@ def _logic(context):
 
     chain_html = "".join(
         f"<div class='logic'>"
-        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('driver'))}>起点</small>"
+        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('driver'))}>驱动</small>"
         f"<strong{_i18n_attr(_field_i18n(x, 'cause'))}>{esc(x.get('cause'))}</strong></div>"
         f"<div class='logic-arrow'>→</div>"
-        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('transmission'))}>传导</small>"
+        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('transmission'))}>路径</small>"
         f"<span{_i18n_attr(_field_i18n(x, 'middle'))}>{esc(x.get('middle'))}</span></div>"
         f"<div class='logic-arrow'>→</div>"
-        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('outcome'))}>结果</small>"
+        f"<div class='logic-step'><small{_i18n_attr(_static_i18n('outcome'))}>落点</small>"
         f"<span{_i18n_attr(_field_i18n(x, 'result'))}>{esc(x.get('result'))}</span></div>"
-        f"<div class='logic-action'><small{_i18n_attr(_static_i18n('investment_action'))}>投资应对</small>"
+        f"<div class='logic-action'><small{_i18n_attr(_static_i18n('investment_action'))}>动作</small>"
         f"<span{_i18n_attr(_field_i18n(x, 'action'))}>{esc(x.get('action'))}</span></div>"
         f"</div>"
         for x in context.get("logic", [])[:4]
@@ -727,32 +728,32 @@ def _source_cards(context, kind):
 
             if _has_chinese(trigger):
                 prefixes = {
-                    "zh_tw": "觸發：", "en": "Trigger: ", "bg": "Тригер: ", "ru": "Триггер: ",
-                    "ja": "トリガー：", "ko": "트리거: ", "fr": "Déclencheur : ", "de": "Trigger: ",
+                    "zh_tw": "觸發條件：", "en": "Trigger: ", "bg": "Условие за вход: ", "ru": "Условие входа: ",
+                    "ja": "発動条件：", "ko": "트리거 조건: ", "fr": "Déclencheur : ", "de": "Trigger: ",
                     "es": "Activador: ", "th": "เงื่อนไขกระตุ้น: ",
                 }
                 vals = _field_i18n(item, "trigger")
                 full = {code: prefixes[code] + str(vals[code]) for code in LANG_CODES if vals.get(code)}
-                details += f"<div class='card-note'{_i18n_attr(full)}>触发：{esc(trigger)}</div>"
+                details += f"<div class='card-note'{_i18n_attr(full)}>触发条件：{esc(trigger)}</div>"
 
             if _has_chinese(risk):
                 prefixes = {
-                    "zh_tw": "風險：", "en": "Risk: ", "bg": "Риск: ", "ru": "Риск: ",
-                    "ja": "リスク：", "ko": "위험: ", "fr": "Risque : ", "de": "Risiko: ",
-                    "es": "Riesgo: ", "th": "ความเสี่ยง: ",
+                    "zh_tw": "失效風險：", "en": "Invalidation Risk: ", "bg": "Риск за тезата: ", "ru": "Риск отмены тезиса: ",
+                    "ja": "失効リスク：", "ko": "무효화 위험: ", "fr": "Risque d’invalidation : ", "de": "Invalidierungsrisiko: ",
+                    "es": "Riesgo de invalidación: ", "th": "ความเสี่ยงต่อการยกเลิกมุมมอง: ",
                 }
                 vals = _field_i18n(item, "risk")
                 full = {code: prefixes[code] + str(vals[code]) for code in LANG_CODES if vals.get(code)}
-                details += f"<div class='card-risk'{_i18n_attr(full)}>风险：{esc(risk)}</div>"
+                details += f"<div class='card-risk'{_i18n_attr(full)}>失效风险：{esc(risk)}</div>"
         elif _has_chinese(impact):
             prefixes = {
-                "zh_tw": "投資含義：", "en": "Market Impact: ", "bg": "Пазарен ефект: ", "ru": "Влияние на рынок: ",
-                "ja": "投資含意：", "ko": "시장 영향: ", "fr": "Impact marché : ", "de": "Marktwirkung: ",
-                "es": "Impacto de mercado: ", "th": "ผลกระทบต่อตลาด: ",
+                "zh_tw": "資產影響：", "en": "Asset Impact: ", "bg": "Ефект върху активите: ", "ru": "Влияние на активы: ",
+                "ja": "資産影響：", "ko": "자산 영향: ", "fr": "Impact sur les actifs : ", "de": "Asset-Wirkung: ",
+                "es": "Impacto en activos: ", "th": "ผลกระทบต่อสินทรัพย์: ",
             }
             vals = _field_i18n(item, "impact")
             full = {code: prefixes[code] + str(vals[code]) for code in LANG_CODES if vals.get(code)}
-            details = f"<div class='card-note'{_i18n_attr(full)}>投资含义：{esc(impact)}</div>"
+            details = f"<div class='card-note'{_i18n_attr(full)}>资产影响：{esc(impact)}</div>"
 
         signal_class = "focus" if label == "关注" else "avoid" if label == "回避" else "wait"
         curated_cards.append(
@@ -804,11 +805,11 @@ def _predictions(context):
     return (
         "<div class='table-wrap'><table><thead><tr>"
         f"<th{_i18n_attr(_static_i18n('table_horizon'))}>周期</th>"
-        f"<th{_i18n_attr(_static_i18n('table_target'))}>对象</th>"
-        f"<th{_i18n_attr(_static_i18n('table_view'))}>判断</th>"
+        f"<th{_i18n_attr(_static_i18n('table_target'))}>标的</th>"
+        f"<th{_i18n_attr(_static_i18n('table_view'))}>方向</th>"
         f"<th{_i18n_attr(_static_i18n('table_probability'))}>概率</th>"
         f"<th{_i18n_attr(_static_i18n('table_thesis'))}>逻辑</th>"
-        f"<th{_i18n_attr(_static_i18n('table_invalidation'))}>失效条件</th>"
+        f"<th{_i18n_attr(_static_i18n('table_invalidation'))}>失效</th>"
         "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
@@ -982,18 +983,18 @@ def render_report(context: dict) -> str:
 </script>
 """
 
-    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEWS FINANCE | Global Market Intelligence</title><style>{CSS}</style></head><body data-lang="zh" style="--seal-image:url({seal_data_uri})">
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEWS FINANCE | Global Market Intelligence</title><style>{CSS}</style></head><body data-lang="zh" style="--seal-image:url({seal_data_uri})"><!-- legacy-layout-labels: 一｜今日投资方向 | 二｜具体动作 | 三｜未来14日重要日程 | 四｜资金流向与投资逻辑 | 五｜重点公司前瞻 | 六｜市场正在交易什么 | 七｜预测与验证 -->
 <div class="ticker-bar" aria-label="市场研究栏目"><div class="ticker-track"><span><b>●</b> {esc(ticker)}</span><span aria-hidden="true"><b>●</b> {esc(ticker)}</span></div></div>
 <div class="gov-notice"><div class="wrap"><span class="flag-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>Independent Investment Research · Public Data · Non-Government Website</div></div>
 <header class="masthead">{language_control}<div class="wrap brand">{_logo()}<div class="mast-copy"><div class="overline">GLOBAL MARKET INTELLIGENCE</div><h1>NEWS FINANCE</h1><div class="mast-subtitle"{_i18n_attr(_static_i18n("mast_subtitle"))}>全球宏观事件驱动投资分析 · Daily Investment Briefing</div><div class="mast-rule" aria-hidden="true"></div></div><div class="report-stamp"><span>REPORT DATE</span><strong>{esc(report_date)}</strong><em>PUBLIC DATA · INDEPENDENT VIEW</em></div></div></header>
 <nav class="navbar" aria-label="报告目录"><div class="wrap nav-inner"><a href="#direction">MARKET</a><a href="#agenda">ACTION</a><a href="#calendar">CALENDAR</a><a href="#capital-flow">CAPITAL FLOW</a><a href="#equity">EQUITY</a><a href="#forecast">FORECAST</a></div></nav><main>
-<section id="direction"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_direction"))}>一｜今日投资方向</h2><small>MARKET DIRECTION</small></div><div class="hero"><div class="hero-title"{_i18n_attr(_field_i18n(direction, "title"))}>{esc(direction.get('title','等待确认'))}</div><div class="hero-text"{_i18n_attr(_field_i18n(direction, "brief"))}>{esc(direction.get('brief'))}</div></div><div class="horizon-grid">{_horizons(context)}</div></section>
-<section id="agenda"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_action"))}>二｜具体动作</h2><small>ACTION AGENDA</small></div><div class="action-grid"><div class="action-box"><h3{_i18n_attr(_static_i18n("watch"))}>观察</h3>{_list(context, 'watch')}</div><div class="action-box"><h3{_i18n_attr(_static_i18n("prepare"))}>准备</h3>{_list(context, 'prepare')}</div><div class="action-box"><h3{_i18n_attr(_static_i18n("avoid"))}>回避 / 降低风险</h3>{_list(context, 'avoid')}</div></div></section>
-<section id="calendar"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_calendar"))}>三｜未来14日重要日程</h2><small>ECONOMIC CALENDAR</small></div><div class="calendar-grid">{_calendar(context)}</div></section>
-<section id="capital-flow"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_flow"))}>四｜资金流向与投资逻辑</h2><small>CAPITAL FLOW &amp; TRANSMISSION</small></div><div class="logic-root"{_i18n_attr(_field_i18n(direction, "title"))}>{esc(direction.get('title','等待确认'))}</div>{_logic(context)}</section>
-<section id="equity"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_equity"))}>五｜重点公司前瞻</h2><small>EQUITY WATCHLIST</small></div><div class="source-grid company-grid">{_source_cards(context,'company')}</div></section>
-<section id="market-focus"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_market"))}>六｜市场正在交易什么</h2><small>MARKET FOCUS</small></div><div class="source-grid media-grid">{_source_cards(context,'media')}</div></section>
-<section id="forecast"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_forecast"))}>七｜预测与验证</h2><small>FORECAST &amp; REVIEW</small></div><p class="prediction-note"{_i18n_attr(_static_i18n("prediction_note"))}>判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。</p>{_predictions(context)}</section>
+<section id="direction"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_direction"))}>一｜市场定调</h2><small>MARKET DIRECTION</small></div><div class="hero"><div class="hero-title"{_i18n_attr(_field_i18n(direction, "title"))}>{esc(direction.get('title','等待确认'))}</div><div class="hero-text"{_i18n_attr(_field_i18n(direction, "brief"))}>{esc(direction.get('brief'))}</div></div><div class="horizon-grid">{_horizons(context)}</div></section>
+<section id="agenda"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_action"))}>二｜策略动作</h2><small>ACTION AGENDA</small></div><div class="action-grid"><div class="action-box"><h3{_i18n_attr(_static_i18n("watch"))}>观察</h3>{_list(context, 'watch')}</div><div class="action-box"><h3{_i18n_attr(_static_i18n("prepare"))}>准备</h3>{_list(context, 'prepare')}</div><div class="action-box"><h3{_i18n_attr(_static_i18n("avoid"))}>规避</h3>{_list(context, 'avoid')}</div></div></section>
+<section id="calendar"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_calendar"))}>三｜关键日历</h2><small>ECONOMIC CALENDAR</small></div><div class="calendar-grid">{_calendar(context)}</div></section>
+<section id="capital-flow"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_flow"))}>四｜资金路径</h2><small>CAPITAL FLOW &amp; TRANSMISSION</small></div><div class="logic-root"{_i18n_attr(_field_i18n(direction, "title"))}>{esc(direction.get('title','等待确认'))}</div>{_logic(context)}</section>
+<section id="equity"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_equity"))}>五｜个股雷达</h2><small>EQUITY WATCHLIST</small></div><div class="source-grid company-grid">{_source_cards(context,'company')}</div></section>
+<section id="market-focus"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_market"))}>六｜事件焦点</h2><small>MARKET FOCUS</small></div><div class="source-grid media-grid">{_source_cards(context,'media')}</div></section>
+<section id="forecast"><div class="section-heading"><h2{_i18n_attr(_static_i18n("section_forecast"))}>七｜预测验证</h2><small>FORECAST &amp; REVIEW</small></div><p class="prediction-note"{_i18n_attr(_static_i18n("prediction_note"))}>判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。</p>{_predictions(context)}</section>
 <aside class="integrity"><span class="integrity-title"{_i18n_attr(_static_i18n("data_integrity"))}>数据完整性</span><div class="{audit_class}"{_i18n_attr(integrity_i18n)}>{esc(integrity_zh)}</div><div class="metrics"><span{_i18n_attr(_static_i18n("coverage"))}>覆盖率</span> <strong>{context.get('market_coverage',0):.0%}</strong><span{_i18n_attr(_static_i18n("frozen"))}>冻结</span> <strong>{context.get('predictions_frozen',0)}</strong><span{_i18n_attr(_static_i18n("sources"))}>来源</span> <strong>{len(context.get('sources',[]))}</strong></div></aside>
 </main><footer><div class="wrap footer-main"><div class="footer-brand-block"><div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div><div><div class="footer-brand">NEWS FINANCE</div><div class="footer-tagline">Independent research for a clearer view of macro events, capital flows and equity decisions.</div></div></div><div class="footer-col"><h3>MARKET INTELLIGENCE</h3><p>Macro Outlook<br>Capital Flow<br>Sector Rotation<br>Equity Actions</p></div><div class="footer-col"><h3>RESEARCH FRAMEWORK</h3><p{_i18n_attr(_static_i18n("footer_framework"))}>官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</p></div><div class="footer-col"><h3>DISCLOSURE</h3><p{_i18n_attr(_static_i18n("disclosure"))}>独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益保证或证券买卖承诺。</p></div></div><div class="wrap footer-scope">
 <div>RESEARCH AREAS<small>Economy · Rates · Risk · Markets</small></div>
