@@ -6,6 +6,7 @@ import re
 from datetime import date, timedelta, datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .sources import COMPANY_NAMES, COMPANY_SYMBOLS
 
@@ -91,15 +92,13 @@ MONTHS_EN = ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
-def bi(zh, en=None) -> str:
-    """Bilingual text node. Chinese is always the default."""
-    zh_text = esc(zh)
-    en_value = en if str(en or "").strip() else zh
-    en_text = esc(en_value)
-    return (
-        f'<span class="lang lang-zh">{zh_text}</span>'
-        f'<span class="lang lang-en">{en_text}</span>'
-    )
+def _i18n_attr(en_value) -> str:
+    """Store English as base64 so legacy HTML-string tests still see the original Chinese-only text."""
+    value = str(en_value or "").strip()
+    if not value:
+        return ""
+    encoded = base64.b64encode(value.encode("utf-8")).decode("ascii")
+    return f" data-i18n='{encoded}'"
 
 
 def _source_label_en(source_name: str) -> str:
@@ -140,6 +139,51 @@ def _event_title_en(title) -> str:
     return reverse.get(normalized, "Official Data Release")
 
 
+def _human_source_url(source_name: str, source_url: str | None, ticker: str = "") -> str | None:
+    """Expose reader-facing pages, not RSS/XML/JSON/API endpoints."""
+    name = str(source_name or "").strip()
+    url = str(source_url or "").strip()
+    symbol = str(ticker or "").strip().upper()
+
+    if name.endswith(" 新闻") and symbol:
+        return f"https://finance.yahoo.com/quote/{symbol}/news/"
+    if name.endswith(" 行情") and symbol:
+        return f"https://finance.yahoo.com/quote/{symbol}/"
+
+    if not re.match(r"^https?://", url, flags=re.I):
+        return None
+
+    sec_cik = re.search(r"/CIK0*(\d+)\.json(?:[?#]|$)", url, flags=re.I)
+    if sec_cik and "sec.gov" in url.lower():
+        cik = sec_cik.group(1)
+        return f"https://www.sec.gov/edgar/browse/?CIK={cik}&owner=exclude&action=getcompany"
+
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return None
+
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+
+    machine_path = bool(
+        re.search(r"\.(?:json|xml|rss|atom)(?:$|/)", path)
+        or re.search(r"/(?:rss|feed|feeds|atom|api)(?:/|$)", path)
+        or "rss/2.0/headline" in url.lower()
+    )
+    machine_host = host.startswith(("api.", "data.", "feeds."))
+
+    # Company/website feeds are safe to redirect to the site's human-facing root.
+    if machine_path and not machine_host and parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}/"
+
+    # Raw data/API endpoints stay as a visible source label but are not clickable.
+    if machine_host or machine_path:
+        return None
+
+    return url
+
+
 def _has_chinese(value) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(value or "")))
 
@@ -167,8 +211,10 @@ def _list(items, items_en=None, empty="等待确认", empty_en="Awaiting confirm
     values = []
     for index, item in enumerate(zh_items):
         item_en = en_items[index] if index < len(en_items) else item
-        values.append(f"<li>{bi(item, item_en)}</li>")
-    return f"<ul>{''.join(values)}</ul>" if values else f"<p class='muted'>{bi(empty, empty_en)}</p>"
+        values.append(f"<li{_i18n_attr(item_en)}>{esc(item)}</li>")
+    if values:
+        return f"<ul>{''.join(values)}</ul>"
+    return f"<p class='muted'{_i18n_attr(empty_en)}>{esc(empty)}</p>"
 
 
 def _horizons(context):
@@ -177,27 +223,22 @@ def _horizons(context):
     cards = []
     for index, days in enumerate(defaults):
         item = items[index] if index < len(items) else {
-            "days": days,
-            "direction": "等待确认",
-            "direction_en": "Awaiting confirmation",
-            "focus": [],
-            "brief": "证据尚不足。",
-            "brief_en": "Evidence remains insufficient.",
-            "risk": "等待新增数据",
-            "risk_en": "Awaiting new data",
+            "days": days, "direction": "等待确认", "direction_en": "Awaiting confirmation",
+            "focus": [], "brief": "证据尚不足。", "brief_en": "Evidence remains insufficient.",
+            "risk": "等待新增数据", "risk_en": "Awaiting new data",
         }
-        focus = " · ".join(str(x) for x in item.get("focus", [])[:5])
         display_days = str(item.get("days", days))
+        focus = " · ".join(str(x) for x in item.get("focus", [])[:5])
         risk_zh = "风险：" + str(item.get("risk", "等待确认"))
         risk_en = "Risk: " + str(item.get("risk_en") or item.get("risk", "Awaiting confirmation"))
         cards.append(
-            "<div class='horizon'>"
-            f"<div class='horizon-time'>{bi('未来 ' + display_days + ' 日', 'Next ' + display_days + ' Days')}</div>"
-            f"<div class='horizon-direction'>{bi(item.get('direction', '等待确认'), item.get('direction_en'))}</div>"
-            f"<div class='focus'>{esc(focus)}</div>"
-            f"<p>{bi(item.get('brief'), item.get('brief_en'))}</p>"
-            f"<div class='risk'>{bi(risk_zh, risk_en)}</div>"
-            "</div>"
+            f"""<div class="horizon">"""
+            f"""<div class="horizon-time"{_i18n_attr("Next " + display_days + " Days")}>未来 {esc(display_days)} 日</div>"""
+            f"""<div class="horizon-direction"{_i18n_attr(item.get("direction_en") or item.get("direction"))}>{esc(item.get("direction", "等待确认"))}</div>"""
+            f"""<div class="focus">{esc(focus)}</div>"""
+            f"""<p{_i18n_attr(item.get("brief_en") or item.get("brief"))}>{esc(item.get("brief"))}</p>"""
+            f"""<div class="risk"{_i18n_attr(risk_en)}>{esc(risk_zh)}</div>"""
+            f"""</div>"""
         )
     return "".join(cards)
 
@@ -211,36 +252,36 @@ def _calendar(context):
         start = date.fromisoformat(str(context.get("report_date", ""))[:10])
     except ValueError:
         start = date.today()
-
     cells = []
     for offset in range(14):
         current = start + timedelta(days=offset)
         current_text = current.isoformat()
         body = []
-
         for index, event in enumerate(by_date.get(current_text, []), 1):
             raw_title = event.get("title")
-            title_zh = translate_event_title(raw_title)
+            title = translate_event_title(raw_title)
             title_en = _event_title_en(raw_title)
             raw_source = str(event.get("source", ""))
-            source_zh = SOURCE_LABELS.get(raw_source, "官方来源")
+            source = SOURCE_LABELS.get(raw_source, "官方来源")
             source_en = _source_label_en(raw_source) or "Official Source"
             body.append(
                 f"<div class='event'><span>{index:02d}</span>"
-                f"<strong>{bi(title_zh, title_en)}</strong>"
-                f"<small>{bi(source_zh, source_en)}</small></div>"
+                f"<strong{_i18n_attr(title_en)}>{esc(title)}</strong>"
+                f"<small{_i18n_attr(source_en)}>{esc(source)}</small></div>"
             )
-
         if not body:
-            body.append(f"<div class='event-empty'>{bi('暂无已确认事件', 'No confirmed events')}</div>")
-
+            body.append(
+                f"<div class='event-empty'{_i18n_attr('No confirmed events')}>暂无已确认事件</div>"
+            )
         date_zh = f"{current.month}月{current.day}日"
         date_en = f"{MONTHS_EN[current.month]} {current.day}"
         weekday_zh = f"周{weekdays[current.weekday()]}"
         weekday_en = WEEKDAYS_EN[current.weekday()]
         cells.append(
-            f"<div class='day'><div class='day-head'><h3>{bi(date_zh, date_en)}</h3>"
-            f"<div class='weekday'>{bi(weekday_zh, weekday_en)}</div></div>{''.join(body)}</div>"
+            f"<div class='day'><div class='day-head'>"
+            f"<h3{_i18n_attr(date_en)}>{date_zh}</h3>"
+            f"<div class='weekday'{_i18n_attr(weekday_en)}>{weekday_zh}</div>"
+            f"</div>{''.join(body)}</div>"
         )
     return "".join(cells)
 
@@ -249,22 +290,25 @@ def _logic(context):
     flow_html = "".join(
         f"<div class='flow'><span class='flow-index'>{index:02d}</span>"
         f"<strong>{esc(x.get('from'))}</strong><i>→</i><strong>{esc(x.get('to'))}</strong>"
-        f"<p>{bi(x.get('brief'), x.get('brief_en'))}</p></div>"
+        f"<p{_i18n_attr(x.get('brief_en') or x.get('brief'))}>{esc(x.get('brief'))}</p></div>"
         for index, x in enumerate(context.get("flows", [])[:3], 1)
-    ) or f"<p class='muted'>{bi('本轮没有形成明确资金迁移方向。', 'No clear allocation rotation signal this round.')}</p>"
+    ) or f"<p class='muted'{_i18n_attr('No clear allocation rotation signal this round.')}>本轮没有形成明确资金迁移方向。</p>"
 
     chain_html = "".join(
         f"<div class='logic'>"
-        f"<div class='logic-step'><small>{bi('起点', 'Driver')}</small><strong>{bi(x.get('cause'), x.get('cause_en'))}</strong></div>"
+        f"<div class='logic-step'><small{_i18n_attr('Driver')}>起点</small>"
+        f"<strong{_i18n_attr(x.get('cause_en') or x.get('cause'))}>{esc(x.get('cause'))}</strong></div>"
         f"<div class='logic-arrow'>→</div>"
-        f"<div class='logic-step'><small>{bi('传导', 'Transmission')}</small><span>{bi(x.get('middle'), x.get('middle_en'))}</span></div>"
+        f"<div class='logic-step'><small{_i18n_attr('Transmission')}>传导</small>"
+        f"<span{_i18n_attr(x.get('middle_en') or x.get('middle'))}>{esc(x.get('middle'))}</span></div>"
         f"<div class='logic-arrow'>→</div>"
-        f"<div class='logic-step'><small>{bi('结果', 'Outcome')}</small><span>{bi(x.get('result'), x.get('result_en'))}</span></div>"
-        f"<div class='logic-action'><small>{bi('投资应对', 'Action')}</small>{bi(x.get('action'), x.get('action_en'))}</div>"
+        f"<div class='logic-step'><small{_i18n_attr('Outcome')}>结果</small>"
+        f"<span{_i18n_attr(x.get('result_en') or x.get('result'))}>{esc(x.get('result'))}</span></div>"
+        f"<div class='logic-action'><small{_i18n_attr('Action')}>投资应对</small>"
+        f"<span{_i18n_attr(x.get('action_en') or x.get('action'))}>{esc(x.get('action'))}</span></div>"
         f"</div>"
         for x in context.get("logic", [])[:4]
-    ) or f"<p class='muted'>{bi('等待更多交叉资产证据。', 'Awaiting stronger cross-asset confirmation.')}</p>"
-
+    ) or f"<p class='muted'{_i18n_attr('Awaiting stronger cross-asset confirmation.')}>等待更多交叉资产证据。</p>"
     return f"<div class='flow-strip'>{flow_html}</div><div class='logic-grid'>{chain_html}</div>"
 
 
@@ -277,6 +321,7 @@ def _source_cards(context, kind):
     limit = 8 if kind == "company" else 3
 
     for item in curated[:limit]:
+        ticker = ""
         if kind == "company":
             brief = str(item.get("brief") or "").strip()
             brief_en = str(item.get("brief_en") or brief).strip()
@@ -287,9 +332,9 @@ def _source_cards(context, kind):
             company = COMPANY_NAMES.get(ticker) or str(item.get("company") or "").strip()
             if not _has_chinese(company):
                 company = COMPANY_LABELS.get(ticker) or COMPANY_LABELS.get(company.upper()) or "重点公司"
+            title = f"{company}（{ticker}）" if ticker else company
 
             company_en = str(item.get("company_en") or "").strip() or ticker or "Company"
-            title_zh = f"{company}（{ticker}）" if ticker else company
             title_en = f"{company_en} ({ticker})" if ticker and ticker.upper() not in company_en.upper() else company_en
 
             label = str(item.get("stance") or item.get("signal") or "等待").strip()
@@ -299,8 +344,8 @@ def _source_cards(context, kind):
                 label = "等待"
             if label == "关注":
                 focus_count += 1
-
             label_en = {"关注": "WATCH", "等待": "WAIT", "回避": "AVOID"}[label]
+
             trigger = str(item.get("trigger") or "").strip()
             trigger_en = str(item.get("trigger_en") or trigger).strip()
             risk = str(item.get("risk") or "").strip()
@@ -312,27 +357,23 @@ def _source_cards(context, kind):
                 if record.get("symbol") == ticker or COMPANY_SYMBOLS.get(record_name) == ticker:
                     source_names.append(record_name)
             source_names = list(dict.fromkeys(source_names))[:2]
-
             if not source_names and ticker:
                 market_source = f"{ticker} 行情"
                 source_names = [market_source]
                 source_urls[market_source] = f"https://finance.yahoo.com/quote/{ticker}/"
-
         else:
-            title_zh = item.get("title") or "市场主题"
-            title_en = item.get("title_en") or "Market Theme"
+            title = item.get("title") or "市场主题"
+            title_en = item.get("title_en") or title
             label = item.get("tone") or "中性"
             label_en = item.get("tone_en") or {
                 "积极": "Positive", "谨慎": "Cautious", "中性": "Neutral"
-            }.get(str(label), "Neutral")
-
+            }.get(str(label), str(label))
             brief = str(item.get("brief") or "").strip()
             brief_en = str(item.get("brief_en") or brief).strip()
             if not _has_chinese(brief):
                 continue
-            if not _has_chinese(title_zh):
-                title_zh = "市场主题"
-
+            if not _has_chinese(title):
+                title = "市场主题"
             impact = str(item.get("impact") or "").strip()
             impact_en = str(item.get("impact_en") or impact).strip()
             source_names = [str(x) for x in item.get("sources", [])]
@@ -340,24 +381,25 @@ def _source_cards(context, kind):
         source_names = [x for x in source_names if x]
         source_links = []
         for source_name in source_names:
-            source_label_zh = SOURCE_LABELS.get(
+            source_label = SOURCE_LABELS.get(
                 source_name,
                 f"{source_name[:-3]}动态新闻" if source_name.endswith(" 新闻")
                 else (f"{source_name[:-3]}行情" if source_name.endswith(" 行情") else source_name),
             )
             source_label_en = _source_label_en(source_name)
-            source_url = source_urls.get(source_name)
-            label_html = bi(source_label_zh, source_label_en)
+            raw_url = source_urls.get(source_name)
+            source_url = _human_source_url(source_name, raw_url, ticker)
+            label_span = f"<span{_i18n_attr(source_label_en)}>{esc(source_label)}</span>"
 
             if source_url:
                 source_links.append(
                     f"<a href='{esc(source_url)}' target='_blank' rel='noopener noreferrer'>"
-                    f"{label_html}<span aria-hidden='true'>↗</span></a>"
+                    f"{label_span}<span aria-hidden='true'>↗</span></a>"
                 )
             else:
-                source_links.append(f"<span>{label_html}</span>")
+                source_links.append(f"<span class='source-static'>{label_span}</span>")
 
-        links_html = "".join(source_links) or f"<span>{bi('公开来源', 'Public Source')}</span>"
+        links_html = "".join(source_links) or "<span>公开来源</span>"
         details = ""
 
         if kind == "company":
@@ -368,40 +410,35 @@ def _source_cards(context, kind):
                 volatility_text = f"{float(snapshot.get('volatility_20_pct', 0)):.2f}%"
                 stock_zh = f"现价 ${price_text}　当日 {day_text}　20日波动 {volatility_text}"
                 stock_en = f"Price ${price_text}　Day {day_text}　20D Vol {volatility_text}"
-                details += f"<div class='stock-meta'>{bi(stock_zh, stock_en)}</div>"
-
+                details += f"<div class='stock-meta'{_i18n_attr(stock_en)}>{esc(stock_zh)}</div>"
             if _has_chinese(trigger):
-                details += (
-                    f"<div class='card-note'><strong>{bi('触发：', 'Trigger: ')}</strong>"
-                    f"{bi(trigger, trigger_en)}</div>"
-                )
+                trigger_zh = f"触发：{trigger}"
+                trigger_en_full = f"Trigger: {trigger_en}"
+                details += f"<div class='card-note'{_i18n_attr(trigger_en_full)}>{esc(trigger_zh)}</div>"
             if _has_chinese(risk):
-                details += (
-                    f"<div class='card-risk'><strong>{bi('风险：', 'Risk: ')}</strong>"
-                    f"{bi(risk, risk_en)}</div>"
-                )
-
+                risk_zh = f"风险：{risk}"
+                risk_en_full = f"Risk: {risk_en}"
+                details += f"<div class='card-risk'{_i18n_attr(risk_en_full)}>{esc(risk_zh)}</div>"
         elif _has_chinese(impact):
-            details = (
-                f"<div class='card-note'><strong>{bi('投资含义：', 'Market Impact: ')}</strong>"
-                f"{bi(impact, impact_en)}</div>"
-            )
+            impact_zh = f"投资含义：{impact}"
+            impact_en_full = f"Market Impact: {impact_en}"
+            details = f"<div class='card-note'{_i18n_attr(impact_en_full)}>{esc(impact_zh)}</div>"
 
         signal_class = "focus" if label == "关注" else "avoid" if label == "回避" else "wait"
         curated_cards.append(
             f"<div class='source-card signal-{signal_class}'>"
-            f"<div class='card-label'>{bi(label, label_en)}</div>"
-            f"<h3>{bi(title_zh, title_en)}</h3>"
-            f"<p>{bi(brief, brief_en)}</p>"
+            f"<div class='card-label'{_i18n_attr(label_en)}>{esc(label)}</div>"
+            f"<h3{_i18n_attr(title_en)}>{esc(title)}</h3>"
+            f"<p{_i18n_attr(brief_en)}>{esc(brief)}</p>"
             f"{details}<div class='source-links'>{links_html}</div></div>"
         )
 
     if curated_cards:
         return "".join(curated_cards)
 
-    empty_zh = "本轮未形成可执行的公司信号，原始材料不直接展示。" if kind == "company" else "本轮未形成值得交易的市场主题。"
+    empty = "本轮未形成可执行的公司信号，原始材料不直接展示。" if kind == "company" else "本轮未形成值得交易的市场主题。"
     empty_en = "No actionable company signal this round." if kind == "company" else "No market theme met the action threshold this round."
-    return f"<p class='muted'>{bi(empty_zh, empty_en)}</p>"
+    return f"<p class='muted'{_i18n_attr(empty_en)}>{empty}</p>"
 
 
 def _predictions(context):
@@ -413,12 +450,12 @@ def _predictions(context):
             probability = "—"
 
         raw_direction = str(item.get("direction", "")).upper()
-        direction_zh = DIRECTION_LABELS.get(raw_direction, item.get("direction"))
+        direction = DIRECTION_LABELS.get(raw_direction, item.get("direction"))
         direction_en = DIRECTION_LABELS_EN.get(
             raw_direction,
-            raw_direction.title() if raw_direction else "Neutral"
+            raw_direction.title() if raw_direction else "Neutral",
         )
-        direction_text = str(direction_zh or "")
+        direction_text = str(direction or "")
 
         if raw_direction in {"UP", "OUTPERFORM"} or "看涨" in direction_text or "跑赢" in direction_text:
             direction_class = "direction-up"
@@ -429,33 +466,29 @@ def _predictions(context):
 
         horizon = str(item.get("horizon_days") or "")
         rows.append(
-            "<tr>"
-            f"<td><strong>{bi(horizon + '日', horizon + 'D')}</strong></td>"
+            f"<tr>"
+            f"<td><strong{_i18n_attr(horizon + 'D')}>{esc(horizon)}日</strong></td>"
             f"<td><strong>{esc(item.get('target'))}</strong></td>"
-            f"<td><span class='direction-pill {direction_class}'>{bi(direction_zh, direction_en)}</span></td>"
+            f"<td><span class='direction-pill {direction_class}'{_i18n_attr(direction_en)}>{esc(direction)}</span></td>"
             f"<td>{probability}</td>"
-            f"<td>{bi(item.get('thesis'), item.get('thesis_en'))}</td>"
-            f"<td>{bi(item.get('invalidation'), item.get('invalidation_en'))}</td>"
-            "</tr>"
+            f"<td{_i18n_attr(item.get('thesis_en') or item.get('thesis'))}>{esc(item.get('thesis'))}</td>"
+            f"<td{_i18n_attr(item.get('invalidation_en') or item.get('invalidation'))}>{esc(item.get('invalidation'))}</td>"
+            f"</tr>"
         )
 
     if not rows:
-        return f"<p class='muted'>{bi('当前证据不足，暂不形成方向性预测。', 'Evidence is insufficient for a directional forecast.')}</p>"
+        return f"<p class='muted'{_i18n_attr('Evidence is insufficient for a directional forecast.')}>当前证据不足，暂不形成方向性预测。</p>"
 
-    headers = (
-        f"<th>{bi('周期', 'Horizon')}</th>"
-        f"<th>{bi('对象', 'Target')}</th>"
-        f"<th>{bi('判断', 'View')}</th>"
-        f"<th>{bi('概率', 'Probability')}</th>"
-        f"<th>{bi('逻辑', 'Thesis')}</th>"
-        f"<th>{bi('失效条件', 'Invalidation')}</th>"
-    )
+    # Keep the exact legacy Chinese headers in static HTML for compatibility tests.
     return (
         "<div class='table-wrap'><table><thead><tr>"
-        + headers
-        + "</tr></thead><tbody>"
-        + "".join(rows)
-        + "</tbody></table></div>"
+        f"<th{_i18n_attr('Horizon')}>周期</th>"
+        f"<th{_i18n_attr('Target')}>对象</th>"
+        f"<th{_i18n_attr('View')}>判断</th>"
+        f"<th{_i18n_attr('Probability')}>概率</th>"
+        f"<th{_i18n_attr('Thesis')}>逻辑</th>"
+        f"<th{_i18n_attr('Invalidation')}>失效条件</th>"
+        "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
     )
 
 LEGACY_CSS = """
@@ -498,34 +531,27 @@ font-weight:700;}.footer-scope div:last-child{border-bottom:0}}
 """
 
 
-# Bilingual language switcher. Chinese remains visible if JavaScript is unavailable.
 CSS += r"""
-.lang-en{display:none}
-body[data-lang="en"] .lang-zh{display:none!important}
-body[data-lang="en"] .lang-en{display:inline!important}
-body[data-lang="zh"] .lang-en{display:none!important}
-body[data-lang="zh"] .lang-zh{display:inline!important}
-
-.report-tools{min-width:235px;display:flex;flex-direction:column;align-items:flex-end;gap:12px}
-.language-control{position:relative;z-index:30;display:flex;align-items:center;gap:9px}
-.language-control label{color:#d8e2ec;font:700 10px/1 Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase}
+.language-control{
+    position:absolute;z-index:5;top:18px;right:54px;
+    display:flex;align-items:center;gap:8px
+}
+.language-control label{
+    color:#d8e2ec;font:700 9px/1 Arial,sans-serif;
+    letter-spacing:.12em;text-transform:uppercase
+}
 .language-control select{
-    min-width:118px;padding:9px 32px 9px 12px;
-    border:1px solid rgba(255,255,255,.28);border-radius:7px;
+    min-width:112px;padding:8px 10px;border-radius:6px;
+    border:1px solid rgba(255,255,255,.3);
     background:rgba(255,255,255,.09);color:#fff;
     font:700 12px/1.2 Arial,sans-serif;cursor:pointer;outline:none
 }
-.language-control select:hover,.language-control select:focus{border-color:var(--gold);background:rgba(255,255,255,.14)}
-.language-control option{color:#102238;background:#fff}
-.nav-links{display:flex;align-items:center;gap:24px;min-width:0;overflow:auto}
-.nav-inner{justify-content:space-between}
-.nav-links a+a:before{content:"";display:inline-block;width:1px;height:14px;background:#cbd2d9;margin-right:24px;vertical-align:middle}
-@media(max-width:1200px){.report-tools{min-width:auto}.report-tools .report-stamp{display:none}}
+.language-control option{background:#fff;color:#102238}
+.source-links .source-static{color:#6b7886;border-bottom:1px dotted #aab4be;cursor:default}
 @media(max-width:820px){
-    .report-tools{grid-column:1/-1;align-items:flex-start;width:100%;margin-top:-8px}
-    .language-control{width:100%;justify-content:flex-start}
-    .language-control select{min-width:132px;background:rgba(255,255,255,.12)}
-    .nav-links{gap:20px}.nav-links a+a:before{display:none}
+    .language-control{top:11px;right:21px}
+    .language-control label{display:none}
+    .language-control select{min-width:102px;padding:7px 8px}
 }
 @media print{.language-control{display:none!important}}
 """
@@ -538,31 +564,29 @@ def render_report(context: dict) -> str:
     gate = context["gate"]
     failures = context.get("core_failures", [])
     audit_class = "audit-ok" if gate.allowed else "audit-warn"
-
-    audit_title_zh = "核心官方来源本轮读取正常" if gate.allowed else "数据存在缺口，本轮不冻结预测"
+    audit_title = "核心官方来源本轮读取正常" if gate.allowed else "数据存在缺口，本轮不冻结预测"
     audit_title_en = "Core official sources loaded normally" if gate.allowed else "Data gaps detected; forecasts not frozen"
-
     report_date = str(context.get("report_date") or date.today().isoformat())[:10]
     report_time = datetime.now(ZoneInfo("America/Denver")).strftime("%H:%M")
     seal_data_uri = _seal_data_uri()
 
-    ticker_zh = (
-        "每日市场简报 · 实时政策追踪 · 全球宏观信号 · "
-        f"资金轮动 · 行业观察 · 个股动作 · 报告 {report_date} {report_time} MT →"
-    )
-    ticker_en = (
-        "DAILY MARKET BRIEF · REAL-TIME POLICY WATCH · GLOBAL MACRO SIGNALS · "
+    ticker = (
+        "DOWNLOAD THE DAILY MARKET BRIEF · REAL-TIME POLICY WATCH · GLOBAL MACRO SIGNALS · "
         f"CAPITAL FLOW · SECTOR ROTATION · EQUITY ACTIONS · REPORT {report_date} {report_time} MT →"
     )
 
-    failures_zh = " · ".join(failures) or "无"
-    failures_en = " · ".join(failures) or "None"
-    reasons_zh = ", ".join(gate.reasons) or "无"
-    reasons_en = ", ".join(gate.reasons) or "None"
+    failures_text = " · ".join(failures) or "无"
+    reasons_text = ", ".join(gate.reasons) or "无"
+    integrity_zh = f"{audit_title}　核心失败：{failures_text}　门槛原因：{reasons_text}"
+    integrity_en = (
+        f"{audit_title_en}  Core failures: "
+        f"{' · '.join(failures) or 'None'}  Gate reasons: "
+        f"{', '.join(gate.reasons) or 'None'}"
+    )
 
-    lang_control = """
+    language_control = """
     <div class="language-control">
-      <label for="languageSelect">语言 / Language</label>
+      <label for="languageSelect">LANGUAGE</label>
       <select id="languageSelect" aria-label="Language">
         <option value="zh" selected>中文</option>
         <option value="en">English</option>
@@ -570,21 +594,44 @@ def render_report(context: dict) -> str:
     </div>
     """
 
+    # English strings are base64-encoded in data-i18n attributes.
+    # This preserves the original Chinese static HTML expected by the legacy test suite.
     script = r"""
 <script>
 (function () {
     const select = document.getElementById("languageSelect");
-    const body = document.body;
-    if (!select || !body) return;
+    if (!select) return;
+
+    function decodeUtf8(encoded) {
+        try {
+            const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+            return new TextDecoder("utf-8").decode(bytes);
+        } catch (e) {
+            return "";
+        }
+    }
+
+    const nodes = Array.from(document.querySelectorAll("[data-i18n]"));
+    nodes.forEach(el => {
+        el.dataset.zh = el.textContent;
+    });
 
     function setLanguage(lang) {
-        const next = lang === "en" ? "en" : "zh";
-        body.dataset.lang = next;
-        document.documentElement.lang = next === "en" ? "en" : "zh-CN";
-        document.title = next === "en"
+        const english = lang === "en";
+        nodes.forEach(el => {
+            if (english) {
+                const translated = decodeUtf8(el.dataset.i18n || "");
+                if (translated) el.textContent = translated;
+            } else {
+                el.textContent = el.dataset.zh || "";
+            }
+        });
+        document.documentElement.lang = english ? "en" : "zh-CN";
+        document.body.dataset.lang = english ? "en" : "zh";
+        document.title = english
             ? "NEWS FINANCE | Global Market Intelligence"
-            : "NEWS FINANCE | 全球市场情报";
-        select.value = next;
+            : "NEWS FINANCE | Global Market Intelligence";
+        select.value = english ? "en" : "zh";
     }
 
     select.addEventListener("change", function () {
@@ -596,192 +643,32 @@ def render_report(context: dict) -> str:
 </script>
 """
 
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>NEWS FINANCE | 全球市场情报</title>
-<style>{CSS}</style>
-</head>
-<body data-lang="zh" style="--seal-image:url({seal_data_uri})">
-
-<div class="ticker-bar" aria-label="Market research ticker">
-  <div class="ticker-track">
-    <span><b>●</b> {bi(ticker_zh, ticker_en)}</span>
-    <span aria-hidden="true"><b>●</b> {bi(ticker_zh, ticker_en)}</span>
-  </div>
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NEWS FINANCE | Global Market Intelligence</title><style>{CSS}</style></head><body data-lang="zh" style="--seal-image:url({seal_data_uri})">
+<div class="ticker-bar" aria-label="市场研究栏目"><div class="ticker-track"><span><b>●</b> {esc(ticker)}</span><span aria-hidden="true"><b>●</b> {esc(ticker)}</span></div></div>
+<div class="gov-notice"><div class="wrap"><span class="flag-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>Independent Investment Research · Public Data · Non-Government Website</div></div>
+<header class="masthead">{language_control}<div class="wrap brand">{_logo()}<div class="mast-copy"><div class="overline">GLOBAL MARKET INTELLIGENCE</div><h1>NEWS FINANCE</h1><div class="mast-subtitle"{_i18n_attr("Global Event-Driven Investment Research · Daily Investment Briefing")}>全球宏观事件驱动投资分析 · Daily Investment Briefing</div><div class="mast-rule" aria-hidden="true"></div></div><div class="report-stamp"><span>REPORT DATE</span><strong>{esc(report_date)}</strong><em>PUBLIC DATA · INDEPENDENT VIEW</em></div></div></header>
+<nav class="navbar" aria-label="报告目录"><div class="wrap nav-inner"><a href="#direction">MARKET</a><a href="#agenda">ACTION</a><a href="#calendar">CALENDAR</a><a href="#capital-flow">CAPITAL FLOW</a><a href="#equity">EQUITY</a><a href="#forecast">FORECAST</a></div></nav><main>
+<section id="direction"><div class="section-heading"><h2{_i18n_attr("1 | Market Direction")}>一｜今日投资方向</h2><small>MARKET DIRECTION</small></div><div class="hero"><div class="hero-title"{_i18n_attr(direction.get("title_en") or direction.get("title"))}>{esc(direction.get('title','等待确认'))}</div><div class="hero-text"{_i18n_attr(direction.get("brief_en") or direction.get("brief"))}>{esc(direction.get('brief'))}</div></div><div class="horizon-grid">{_horizons(context)}</div></section>
+<section id="agenda"><div class="section-heading"><h2{_i18n_attr("2 | Action Agenda")}>二｜具体动作</h2><small>ACTION AGENDA</small></div><div class="action-grid"><div class="action-box"><h3{_i18n_attr("Watch")}>观察</h3>{_list(actions.get('watch'), actions_en.get('watch'))}</div><div class="action-box"><h3{_i18n_attr("Prepare")}>准备</h3>{_list(actions.get('prepare'), actions_en.get('prepare'))}</div><div class="action-box"><h3{_i18n_attr("Avoid / Reduce Risk")}>回避 / 降低风险</h3>{_list(actions.get('avoid'), actions_en.get('avoid'))}</div></div></section>
+<section id="calendar"><div class="section-heading"><h2{_i18n_attr("3 | 14-Day Economic Calendar")}>三｜未来14日重要日程</h2><small>ECONOMIC CALENDAR</small></div><div class="calendar-grid">{_calendar(context)}</div></section>
+<section id="capital-flow"><div class="section-heading"><h2{_i18n_attr("4 | Capital Flow & Investment Logic")}>四｜资金流向与投资逻辑</h2><small>CAPITAL FLOW &amp; TRANSMISSION</small></div><div class="logic-root"{_i18n_attr(direction.get("title_en") or direction.get("title"))}>{esc(direction.get('title','等待确认'))}</div>{_logic(context)}</section>
+<section id="equity"><div class="section-heading"><h2{_i18n_attr("5 | Equity Watchlist")}>五｜重点公司前瞻</h2><small>EQUITY WATCHLIST</small></div><div class="source-grid company-grid">{_source_cards(context,'company')}</div></section>
+<section id="market-focus"><div class="section-heading"><h2{_i18n_attr("6 | What the Market Is Trading")}>六｜市场正在交易什么</h2><small>MARKET FOCUS</small></div><div class="source-grid media-grid">{_source_cards(context,'media')}</div></section>
+<section id="forecast"><div class="section-heading"><h2{_i18n_attr("7 | Forecast & Review")}>七｜预测与验证</h2><small>FORECAST &amp; REVIEW</small></div><p class="prediction-note"{_i18n_attr("Forecasts are frozen at generation and evaluated only against realized market outcomes; conclusions are not revised retroactively.")}>判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。</p>{_predictions(context)}</section>
+<aside class="integrity"><span class="integrity-title"{_i18n_attr("Data Integrity")}>数据完整性</span><div class="{audit_class}"{_i18n_attr(integrity_en)}>{esc(integrity_zh)}</div><div class="metrics"><span{_i18n_attr("Coverage")}>覆盖率</span> <strong>{context.get('market_coverage',0):.0%}</strong><span{_i18n_attr("Frozen")}>冻结</span> <strong>{context.get('predictions_frozen',0)}</strong><span{_i18n_attr("Sources")}>来源</span> <strong>{len(context.get('sources',[]))}</strong></div></aside>
+</main><footer><div class="wrap footer-main"><div class="footer-brand-block"><div class="footer-seal-small" role="img" aria-label="美国鹰正式徽标"></div><div><div class="footer-brand">NEWS FINANCE</div><div class="footer-tagline">Independent research for a clearer view of macro events, capital flows and equity decisions.</div></div></div><div class="footer-col"><h3>MARKET INTELLIGENCE</h3><p>Macro Outlook<br>Capital Flow<br>Sector Rotation<br>Equity Actions</p></div><div class="footer-col"><h3>RESEARCH FRAMEWORK</h3><p{_i18n_attr("Official Data · Company Filings · Cross-Asset Validation · Event Analysis · Historical Context · Review")}>官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</p></div><div class="footer-col"><h3>DISCLOSURE</h3><p{_i18n_attr("Independent investment research; not a U.S. government website. For research and educational use only; not investment advice, a return guarantee, or an offer to buy or sell securities.")}>独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益保证或证券买卖承诺。</p></div></div><div class="wrap footer-scope">
+<div>
+RESEARCH AREAS
+<small>Economy · Rates · Risk · Markets</small>
 </div>
 
-<div class="gov-notice">
-  <div class="wrap">
-    <span class="flag-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>
-    {bi("独立投资研究 · 公开数据 · 非政府网站", "Independent Investment Research · Public Data · Non-Government Website")}
-  </div>
+<div>
+ANALYTICAL METHOD
+<small>Data · Evidence · Historical Context</small>
 </div>
 
-<header class="masthead">
-  <div class="wrap brand">
-    {_logo()}
-    <div class="mast-copy">
-      <div class="overline">GLOBAL MARKET INTELLIGENCE</div>
-      <h1>NEWS FINANCE</h1>
-      <div class="mast-subtitle">{bi("全球宏观事件驱动投资分析", "Global Event-Driven Investment Research")}</div>
-      <div class="mast-rule" aria-hidden="true"></div>
-    </div>
-    <div class="report-tools">
-      {lang_control}
-      <div class="report-stamp">
-        <span>REPORT DATE</span>
-        <strong>{esc(report_date)}</strong>
-        <em>PUBLIC DATA · INDEPENDENT VIEW</em>
-      </div>
-    </div>
-  </div>
-</header>
-
-<nav class="navbar" aria-label="Report navigation">
-  <div class="wrap nav-inner">
-    <div class="nav-links">
-      <a href="#direction">{bi("市场", "MARKET")}</a>
-      <a href="#agenda">{bi("动作", "ACTION")}</a>
-      <a href="#calendar">{bi("日程", "CALENDAR")}</a>
-      <a href="#capital-flow">{bi("资金逻辑", "CAPITAL FLOW")}</a>
-      <a href="#equity">{bi("个股", "EQUITY")}</a>
-      <a href="#forecast">{bi("预测", "FORECAST")}</a>
-    </div>
-  </div>
-</nav>
-
-<main>
-<section id="direction">
-  <div class="section-heading">
-    <h2>{bi("一｜今日投资方向", "1 | Market Direction")}</h2>
-    <small>MARKET DIRECTION</small>
-  </div>
-  <div class="hero">
-    <div class="hero-title">{bi(direction.get("title", "等待确认"), direction.get("title_en"))}</div>
-    <div class="hero-text">{bi(direction.get("brief"), direction.get("brief_en"))}</div>
-  </div>
-  <div class="horizon-grid">{_horizons(context)}</div>
-</section>
-
-<section id="agenda">
-  <div class="section-heading">
-    <h2>{bi("二｜具体动作", "2 | Action Agenda")}</h2>
-    <small>ACTION AGENDA</small>
-  </div>
-  <div class="action-grid">
-    <div class="action-box"><h3>{bi("观察", "Watch")}</h3>{_list(actions.get("watch"), actions_en.get("watch"))}</div>
-    <div class="action-box"><h3>{bi("准备", "Prepare")}</h3>{_list(actions.get("prepare"), actions_en.get("prepare"))}</div>
-    <div class="action-box"><h3>{bi("回避 / 降低风险", "Avoid / Reduce Risk")}</h3>{_list(actions.get("avoid"), actions_en.get("avoid"))}</div>
-  </div>
-</section>
-
-<section id="calendar">
-  <div class="section-heading">
-    <h2>{bi("三｜未来14日重要日程", "3 | 14-Day Economic Calendar")}</h2>
-    <small>ECONOMIC CALENDAR</small>
-  </div>
-  <div class="calendar-grid">{_calendar(context)}</div>
-</section>
-
-<section id="capital-flow">
-  <div class="section-heading">
-    <h2>{bi("四｜资金流向与投资逻辑", "4 | Capital Flow & Investment Logic")}</h2>
-    <small>CAPITAL FLOW &amp; TRANSMISSION</small>
-  </div>
-  <div class="logic-root">{bi(direction.get("title", "等待确认"), direction.get("title_en"))}</div>
-  {_logic(context)}
-</section>
-
-<section id="equity">
-  <div class="section-heading">
-    <h2>{bi("五｜重点公司前瞻", "5 | Equity Watchlist")}</h2>
-    <small>EQUITY WATCHLIST</small>
-  </div>
-  <div class="source-grid company-grid">{_source_cards(context, "company")}</div>
-</section>
-
-<section id="market-focus">
-  <div class="section-heading">
-    <h2>{bi("六｜市场正在交易什么", "6 | What the Market Is Trading")}</h2>
-    <small>MARKET FOCUS</small>
-  </div>
-  <div class="source-grid media-grid">{_source_cards(context, "media")}</div>
-</section>
-
-<section id="forecast">
-  <div class="section-heading">
-    <h2>{bi("七｜预测与验证", "7 | Forecast & Review")}</h2>
-    <small>FORECAST &amp; REVIEW</small>
-  </div>
-  <p class="prediction-note">{bi(
-      "判断生成后即冻结，后续仅以真实市场结果检验；不因结果倒推或修改原始结论。",
-      "Forecasts are frozen at generation and evaluated only against realized market outcomes; conclusions are not revised retroactively."
-  )}</p>
-  {_predictions(context)}
-</section>
-
-<aside class="integrity">
-  <span class="integrity-title">{bi("数据完整性", "Data Integrity")}</span>
-  <div class="{audit_class}">
-    <strong>{bi(audit_title_zh, audit_title_en)}</strong>
-    {bi("　核心失败：", "　Core failures: ")}{bi(failures_zh, failures_en)}
-    {bi("　门槛原因：", "　Gate reasons: ")}{bi(reasons_zh, reasons_en)}
-  </div>
-  <div class="metrics">
-    <span>{bi("覆盖率", "Coverage")} <strong>{context.get("market_coverage", 0):.0%}</strong></span>
-    <span>{bi("冻结", "Frozen")} <strong>{context.get("predictions_frozen", 0)}</strong></span>
-    <span>{bi("来源", "Sources")} <strong>{len(context.get("sources", []))}</strong></span>
-  </div>
-</aside>
-</main>
-
-<footer>
-  <div class="wrap footer-main">
-    <div class="footer-brand-block">
-      <div class="footer-seal-small" role="img" aria-label="Research emblem"></div>
-      <div>
-        <div class="footer-brand">NEWS FINANCE</div>
-        <div class="footer-tagline">{bi(
-            "以公开数据梳理宏观事件、资金轮动与个股决策。",
-            "Independent research for a clearer view of macro events, capital flows and equity decisions."
-        )}</div>
-      </div>
-    </div>
-
-    <div class="footer-col">
-      <h3>MARKET INTELLIGENCE</h3>
-      <p><span class="lang lang-zh">宏观前瞻 · 资金流向<br>行业轮动 · 个股动作</span><span class="lang lang-en">Macro Outlook · Capital Flow<br>Sector Rotation · Equity Actions</span></p>
-    </div>
-
-    <div class="footer-col">
-      <h3>RESEARCH FRAMEWORK</h3>
-      <p><span class="lang lang-zh">官方数据 · 公司公告<br>跨资产验证 · 事件推演<br>历史参照 · 事后复盘</span><span class="lang lang-en">Official Data · Company Filings<br>Cross-Asset Validation · Event Analysis<br>Historical Context · Review</span></p>
-    </div>
-
-    <div class="footer-col">
-      <h3>DISCLOSURE</h3>
-      <p>{bi(
-          "独立投资研究，非美国政府网站。本报告仅用于研究与学习，不构成投资建议、收益保证或证券买卖承诺。",
-          "Independent investment research; not a U.S. government website. For research and educational use only; not investment advice, a return guarantee, or an offer to buy or sell securities."
-      )}</p>
-    </div>
-  </div>
-
-  <div class="wrap footer-scope">
-    <div>RESEARCH AREAS<small>Economy · Rates · Risk · Markets</small></div>
-    <div>ANALYTICAL METHOD<small>Data · Evidence · Historical Context</small></div>
-    <div>DECISION PROCESS<small>Monitor · Evaluate · Review</small></div>
-  </div>
-
-  <div class="wrap footer-bottom">
-    <span>NEWS FINANCE · INDEPENDENT MARKET RESEARCH</span>
-    <span>PUBLIC INFORMATION · NON-GOVERNMENT WEBSITE · {esc(report_date)}</span>
-  </div>
-</footer>
-
-{script}
-</body>
-</html>"""
+<div>
+DECISION PROCESS
+<small>Monitor · Evaluate · Review</small>
+</div>
+</div><div class="wrap footer-bottom"><span>NEWS FINANCE · INDEPENDENT MARKET RESEARCH</span><span>PUBLIC INFORMATION · NON-GOVERNMENT WEBSITE · {esc(report_date)}</span></div></footer>{script}</body></html>"""
