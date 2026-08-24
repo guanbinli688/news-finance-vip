@@ -234,7 +234,7 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
 
         # A calendar item must clear a meaningful market-impact threshold.
         # This prevents "official but irrelevant" releases from filling the grid.
-        if importance < 65:
+        if importance < 58:
             continue
 
         normalized_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
@@ -271,7 +271,148 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
     return _filter_raw_calendar_events(raw_events, start=start, days=days)
 
 
-def _calendar_company_evidence(compact_sources, limit: int = 18):
+def _dedicated_calendar_specs(report_date: date):
+    """
+    High-value schedule pages used only to improve event discovery.
+    They do not change the calendar UI.
+
+    These pages are selected because they publish explicit forward dates:
+    - BEA: PCE/GDP/trade release schedule
+    - Federal Reserve: monthly official calendar, including speeches/FOMC
+    - Michigan: next Consumer Sentiment release
+    - NVIDIA IR: major index-moving earnings/events
+    """
+    month_slug = report_date.strftime("%B").lower()
+    next_month_date = (report_date.replace(day=28) + timedelta(days=7)).replace(day=1)
+    next_month_slug = next_month_date.strftime("%B").lower()
+
+    specs = [
+        ("BEA", "https://www.bea.gov/news/schedule", "calendar", False),
+        (
+            "Federal Reserve",
+            f"https://www.federalreserve.gov/newsevents/{report_date.year}-{month_slug}.htm",
+            "calendar",
+            False,
+        ),
+        (
+            "Federal Reserve Next Month",
+            f"https://www.federalreserve.gov/newsevents/{next_month_date.year}-{next_month_slug}.htm",
+            "calendar",
+            False,
+        ),
+        (
+            "Michigan Surveys of Consumers",
+            "https://www.sca.isr.umich.edu/",
+            "calendar",
+            False,
+        ),
+        (
+            "NVIDIA IR",
+            "https://investor.nvidia.com/home/default.aspx",
+            "calendar",
+            False,
+        ),
+    ]
+    return specs
+
+
+_DISPLAY_META_LEAK_MARKERS = (
+    "absent",
+    "schedule evidence",
+    "calendar text",
+    "later dates include",
+    "input confirms",
+    "input only confirms",
+    "source text",
+    "page text",
+    "not found in",
+    "no date found",
+    "未找到",
+    "输入仅确认",
+    "日程文本",
+    "来源页面",
+    "抓取",
+)
+
+
+def _has_display_meta_leak(text: str) -> bool:
+    """
+    Detect source-debug / prompt-debug language that should never appear
+    in reader-facing Chinese prose.
+    """
+    value = " ".join(str(text or "").split())
+    if not value:
+        return False
+
+    lowered = value.lower()
+    if any(marker in lowered for marker in _DISPLAY_META_LEAK_MARKERS):
+        return True
+
+    # Reader-facing Simplified Chinese may legitimately contain tickers/acronyms
+    # such as CPI/PCE/SPY. What we reject is a natural-language English clause.
+    for match in re.finditer(
+        r"\b[A-Za-z][A-Za-z0-9'?-]*(?:\s+[A-Za-z][A-Za-z0-9'?-]*){2,}\b",
+        value,
+    ):
+        words = match.group(0).split()
+        # All-uppercase finance acronyms/tickers are acceptable.
+        if all(word.upper() == word and len(word) <= 8 for word in words):
+            continue
+        return True
+
+    return False
+
+
+def _sanitize_media_themes(themes, source_records, limit: int = 5):
+    """
+    Keep MARKET FOCUS about the market, not about our data-collection process.
+
+    - Drop any theme whose Chinese title/brief/impact contains prompt/source-debug leakage.
+    - Keep only real source names from collected evidence.
+    - Never let tickers or market symbols masquerade as source names.
+    """
+    valid_source_names = {
+        str(record.get("name") or "").strip()
+        for record in source_records or []
+        if record.get("status") == "SUCCESS" and str(record.get("name") or "").strip()
+    }
+
+    cleaned = []
+    for item in themes or []:
+        if not isinstance(item, dict):
+            continue
+
+        title = str(item.get("title") or "").strip()
+        brief = str(item.get("brief") or "").strip()
+        impact = str(item.get("impact") or "").strip()
+
+        if not title or not brief:
+            continue
+
+        if (
+            _has_display_meta_leak(title)
+            or _has_display_meta_leak(brief)
+            or _has_display_meta_leak(impact)
+        ):
+            continue
+
+        sources = []
+        for source in item.get("sources", []) or []:
+            source_name = str(source or "").strip()
+            if source_name in valid_source_names:
+                sources.append(source_name)
+
+        item = dict(item)
+        item["sources"] = list(dict.fromkeys(sources))[:3]
+        cleaned.append(item)
+
+        if len(cleaned) >= limit:
+            break
+
+    return cleaned
+
+
+def _calendar_company_evidence(compact_sources, limit: int = 24):
     """
     Feed the master pass only company material likely to contain a scheduled,
     market-moving catalyst. This lets earnings / investor days compete with
@@ -300,7 +441,7 @@ def _calendar_company_evidence(compact_sources, limit: int = 18):
             "kind": item.get("kind"),
             "symbol": item.get("symbol"),
             "status": item.get("status"),
-            "text": body[:850],
+            "text": body[:1800],
         })
         if len(selected) >= limit:
             break
@@ -962,6 +1103,14 @@ class HttpCollector:
         else:
             with ThreadPoolExecutor(max_workers=10) as executor:
                 records = list(executor.map(lambda spec: self._fetch(*spec), specs))
+
+            # Dedicated forward-looking schedule pages.
+            # Skipped for externally mocked sessions so existing finite-session tests
+            # do not need extra mocked HTTP responses.
+            calendar_specs = _dedicated_calendar_specs(self.settings.report_date)
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                records += list(executor.map(lambda spec: self._fetch(*spec), calendar_specs))
+
         market = self.market_loader(list(SIGNALS))
         market_context = {}
         if full and self.market_context_loader is not None:
@@ -994,7 +1143,12 @@ class HttpCollector:
         if any(r["status"] == "SUCCESS" and r["kind"] in {"company", "company_news"} for r in records):
             evidence_kinds.add("company")
         core_failures = [r["name"] for r in records if r["core"] and r["status"] != "SUCCESS"]
-        events = next((r.get("events", []) for r in records if r["name"] == "BLS" and r["status"] == "SUCCESS"), [])
+        events = []
+        for record in records:
+            if record.get("status") != "SUCCESS":
+                continue
+            events.extend(record.get("events", []) or [])
+
         return {
             "sources": records, "core_failures": core_failures,
             "evidence_kinds": evidence_kinds, "market": market,
@@ -1175,10 +1329,12 @@ class OpenAIAnalyzer:
                 limit = 1800
             elif kind == "company_news":
                 limit = 1000
+            elif kind == "calendar":
+                limit = 5000
             elif kind == "official":
-                limit = 1600
+                limit = 1800
             else:
-                limit = 1200
+                limit = 1400
             compact_sources.append({
                 "name": record.get("name"), "kind": kind,
                 "symbol": record.get("symbol") or COMPANY_SYMBOLS.get(record.get("name")),
@@ -1186,15 +1342,26 @@ class OpenAIAnalyzer:
             })
         macro_sources = [
             item for item in compact_sources
-            if item.get("kind") in {"official", "media"}
+            if item.get("kind") in {"official", "media", "calendar"}
         ]
         calendar_company_sources = _calendar_company_evidence(compact_sources)
 
         prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
-        prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
-        prompt += "\n原始未来14日官方日程候选（只作候选，禁止照单全收）：\n" + json.dumps(
+        prompt += "\n宏观、政策与财经证据：\n" + json.dumps(
+            [x for x in macro_sources if x.get("kind") != "calendar"],
+            ensure_ascii=False,
+        )
+        prompt += (
+            "\n高优先级未来日程页面【仅用于 events 字段提取日期；"
+            "不得用于 direction/horizons/actions/flows/logic/media_themes 的正文论据】：\n"
+            + json.dumps(
+                [x for x in macro_sources if x.get("kind") == "calendar"],
+                ensure_ascii=False,
+            )
+        )
+        prompt += "\n原始未来14日结构化日程候选（只作候选，禁止照单全收）：\n" + json.dumps(
             collected.get("events", []), ensure_ascii=False
         )
         prompt += "\n可能包含财报/投资者日等明确日期的公司证据：\n" + json.dumps(
@@ -1255,6 +1422,11 @@ class OpenAIAnalyzer:
 10. 同一事实只出现一次；不同模块不得反复复述同一结论。
 11. 中文禁止套话：值得关注、密切留意、市场正在关注、可能产生一定影响、从某种程度上、整体来看、需要注意的是；英文也禁止对应空话。
 12. 结论先行；少形容词、少铺垫、少重复。
+13. 读者正文禁止出现任何“分析过程/数据抓取/页面诊断”语言，例如：
+    absent、schedule evidence、calendar text、later dates include、input confirms、
+    “输入仅确认”“页面未找到”“日程文本显示”“来源抓取失败”等。
+14. 中文简体字段必须是自然中文；允许 CPI/PCE/GDP/FOMC/SPY/QQQ/NVDA 等标准缩写和ticker，
+    但禁止出现连续英文解释句、英文网页片段或把原始证据直接粘贴进中文正文。
 
 
 多语言输出（必须执行）：
@@ -1304,25 +1476,29 @@ logic：
 - 优先覆盖真正有证据的利率、美元、通胀/商品、风险偏好、市场宽度、行业轮动、海外市场。
 
 media_themes：
-- 最多5项；优先“即将落地的硬事件 + 正在发酵的暗线”。
-- title / brief / impact 为中文；title_en / brief_en / impact_en为同义英文；tone_en与tone严格对应。
-- title 12-28字，直接写事件。
-- brief 50-80字：事实 + 关键数字/状态 + 预期差；禁止背景科普。
+- 最多5项；这里只写“市场正在交易的主题”，不是日程检查器、数据抓取日志或来源诊断。
+- 优先“已经发生/正在发酵且正在影响定价的主题”；未来纯日程若尚未产生交易影响，应留在 events，不要重复塞进 media_themes。
+- 高优先级未来日程页面只允许帮助 events 提取日期，禁止把“某日期缺失/某页面只确认某项/后续还有CPI”等页面诊断写进 media_themes。
+- title / brief / impact 为自然中文；title_en / brief_en / impact_en为同义英文；tone_en与tone严格对应。
+- 中文正文只允许标准金融缩写/ticker夹在中文句子中；禁止连续英文自然语言短语或原始网页片段。
+- title 12-28字，直接写市场主题。
+- brief 50-80字：事实 + 关键数字/状态 + 预期差；禁止背景科普、禁止说明“输入有没有找到什么”。
 - impact 35-60字：传导链 + 受影响资产 + 下一验证点。
-- sources 仅列真实支持该主题的输入来源，来源名保持原文。
-- 一个主题只讲一件事。
+- sources 必须逐字使用“宏观、政策与财经证据”中的真实 source name；不得填 SPY/QQQ/VIX/GLD 等资产代码。
+- 一个主题只讲一件事；没有可靠增量主题时宁可少于3项。
 
 events（这是“未来14日日历”的最终展示事件，必须严筛）：
 - 日历形式不变，但禁止“为了填格子而填格子”；没有高影响事件的日期可以留空。
 - 只选输入证据中明确给出未来日期、且可能显著影响美股/美债/美元/黄金/原油/主要行业的事件。
-- 最多12项；单日最多3项；按市场重要性排序并给 importance 0-100。
-- importance < 65 的事件不要输出。
+- 目标5-10项、最多12项；单日最多3项；按市场重要性排序并给 importance 0-100。
+- importance < 58 的事件不要输出；但禁止为凑数量加入与美股定价弱相关的统计发布。
 - 优先级：
   A级：FOMC、Fed主席/杰克逊霍尔、CPI、核心PCE、非农、GDP、重大关税/制裁/政策节点；
   B级：PPI、零售销售、ISM/JOLTS/消费者通胀预期、10Y/30Y国债拍卖、OPEC+、大型权重股/行业龙头财报；
   C级：只有在当前市场主线高度相关时才保留其他官方数据。
-- 大型公司财报只有在输入中存在明确日期证据时才能进入；禁止凭记忆补财报日期。
-- 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入。
+- 大型公司财报只有在输入中存在明确日期证据时才能进入；公司IR Events/Press Release属于有效日期证据，禁止凭记忆补财报日期。
+- Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期属于有效日程证据，应主动提取而不是忽略。
+- 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入；单纯评论或已发生新闻不进入未来日历。
 - BLS的普通统计发布不是天然重要。明确排除：暑期青年劳动力、休假获取与使用、职业展望手册、县级就业工资、初步基准等低交易价值项目。
 - 同一事件多来源重复时只保留一项；优先 source：官方机构 > 公司IR > Reuters/FT/AP/CNBC等主流媒体。
 - title 只写“事件本身”，建议10-24字；不要在日历标题里写影响分析。
@@ -1353,6 +1529,13 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
         )
         parsed = self._complete_json("master", system_prompt, prompt)
 
+        # Reader-facing MARKET FOCUS must never expose source/debug fragments.
+        parsed["media_themes"] = _sanitize_media_themes(
+            parsed.get("media_themes", []),
+            collected.get("sources", []),
+            limit=5,
+        )
+
         # Calendar stays exactly the same visually. Only replace its event list
         # with a high-impact, evidence-backed selection.
         curated_events = _normalize_market_calendar_events(
@@ -1367,7 +1550,10 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
         prediction_prompt = "市场快照：\n" + json.dumps(collected.get("market", {}), ensure_ascii=False)
         prediction_prompt += "\n跨资产1日/5日/20日量化状态：\n" + json.dumps(collected.get("market_context", {}), ensure_ascii=False)
         prediction_prompt += "\n市场标的中文说明：\n" + json.dumps(SIGNAL_NAMES, ensure_ascii=False)
-        prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(macro_sources, ensure_ascii=False)
+        prediction_prompt += "\n宏观、政策与财经证据：\n" + json.dumps(
+            [x for x in macro_sources if x.get("kind") != "calendar"],
+            ensure_ascii=False,
+        )
         prediction_prompt += "\n允许预测的完整对象：\n" + json.dumps(PREDICTION_TARGETS, ensure_ascii=False)
         prediction_prompt += "\n预测对象分组：\n" + json.dumps(PREDICTION_GROUPS, ensure_ascii=False)
         prediction_prompt += """
