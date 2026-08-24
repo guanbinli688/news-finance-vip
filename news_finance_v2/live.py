@@ -877,26 +877,97 @@ class OpenAIAnalyzer:
         self.repository = RadarRepository(settings.db_file)
 
     def _complete_json(self, purpose: str, system_prompt: str, prompt: str):
+        """
+        JSON-safe OpenAI call for large multilingual payloads.
+
+        - OpenAI: request JSON mode explicitly.
+        - Allow a larger output budget for 11-language responses.
+        - Retry once if parsing still fails.
+        - Fall back to the old call signature for lightweight mocked test clients.
+        """
         key = make_cache_key(
-            provider=self.settings.ai_provider, model=self.settings.ai_model, purpose=purpose,
-            system_prompt=system_prompt, user_prompt=prompt, prompt_version=self.settings.prompt_version,
+            provider=self.settings.ai_provider,
+            model=self.settings.ai_model,
+            purpose=purpose,
+            system_prompt=system_prompt,
+            user_prompt=prompt,
+            prompt_version=self.settings.prompt_version,
         )
         now = datetime.now(timezone.utc)
         cached = self.repository.cache_get(key, now=now)
         if cached is not None:
             return cached
-        response = self.client.responses.create(
-            model=self.settings.ai_model,
-            instructions=system_prompt,
-            input=prompt,
-        )
-        raw = response.output_text.strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.I).strip()
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict):
-            raise ValueError(f"AI {purpose} 输出必须是JSON对象")
-        self.repository.cache_set(key, parsed, expires_at=now + timedelta(hours=self.settings.cache_ttl_hours))
-        return parsed
+
+        def create_response(extra_instructions: str = ""):
+            instructions = system_prompt
+            if extra_instructions:
+                instructions += "\n\n" + extra_instructions
+
+            kwargs = {
+                "model": self.settings.ai_model,
+                "instructions": instructions,
+                "input": prompt,
+            }
+
+            if self.settings.ai_provider == "openai":
+                # JSON mode guarantees syntactically valid JSON.
+                kwargs["text"] = {"format": {"type": "json_object"}}
+                # 11-language output is much larger than the old bilingual payload.
+                kwargs["max_output_tokens"] = 30000
+
+            try:
+                return self.client.responses.create(**kwargs)
+            except TypeError:
+                # Preserve compatibility with simple mocked clients in pytest.
+                kwargs.pop("text", None)
+                kwargs.pop("max_output_tokens", None)
+                return self.client.responses.create(**kwargs)
+
+        last_error = None
+
+        for attempt in range(2):
+            retry_instruction = ""
+            if attempt:
+                retry_instruction = (
+                    "上一次输出无法被 json.loads 解析。请重新输出完整合法的 JSON 对象；"
+                    "不要Markdown代码块，不要解释，不要省略任何结尾括号或逗号，"
+                    "JSON之外不要输出任何文字。"
+                )
+
+            response = create_response(retry_instruction)
+
+            status = str(getattr(response, "status", "") or "").lower()
+            if status == "incomplete":
+                details = getattr(response, "incomplete_details", None)
+                last_error = ValueError(
+                    f"AI {purpose} 输出不完整: {details or 'unknown reason'}"
+                )
+                continue
+
+            raw = str(getattr(response, "output_text", "") or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I).strip()
+
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                last_error = ValueError(
+                    f"AI {purpose} JSON解析失败: "
+                    f"line={exc.lineno}, column={exc.colno}, char={exc.pos}"
+                )
+                continue
+
+            if not isinstance(parsed, dict):
+                last_error = ValueError(f"AI {purpose} 输出必须是JSON对象")
+                continue
+
+            self.repository.cache_set(
+                key,
+                parsed,
+                expires_at=now + timedelta(hours=self.settings.cache_ttl_hours),
+            )
+            return parsed
+
+        raise last_error or ValueError(f"AI {purpose} JSON输出失败")
 
     def analyze(self, collected):
         compact_sources = []
@@ -1044,6 +1115,7 @@ predictions：
 
 最终自检：
 删掉任何不影响结论的句子；删掉重复观点；删掉没有事实、数字、因果或动作的句子。
+JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的任何文字。
 """
 
         system_prompt = (
@@ -1086,6 +1158,7 @@ predictions：
 15. 对 `thesis` 与 `invalidation`，除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
 16. 所有语言共享同一 horizon_days、target、direction、probability、sensors、evidence_ids；仅翻译展示文本。
 17. 各语言保持高信息密度，不增加中文没有的事实。
+18. JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的任何文字。
 """
         prediction_system = (
             "你是多语种跨资产预测负责人。先形成唯一中文预测，再把同一预测翻译为所要求的十种其他语言。"
@@ -1177,6 +1250,7 @@ predictions：
 21. company / stance / brief / trigger / risk 除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
 22. company 的各语言版本可使用该市场最常见的公司名称；无法可靠本地化时保留英文公司名或ticker。
 23. 所有语言的 stance 必须与中文完全一致；只翻译表达，不重新判断。
+24. JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的任何文字。
 """
             company_system = (
                 "你是多语种美股研究负责人。候选已通过量价和新闻初筛。"
