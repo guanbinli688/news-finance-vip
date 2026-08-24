@@ -925,81 +925,112 @@ class OpenAIAnalyzer:
         prompt += """
 \n请生成中文机构晨报所需的完整 JSON：
 {
-  "direction":{"title":"","brief":"","bias":"偏积极|偏谨慎|中性"},
+  "direction":{
+    "title":"","title_en":"",
+    "brief":"","brief_en":"",
+    "bias":"偏积极|偏谨慎|中性","bias_en":"Constructive|Cautious|Neutral"
+  },
   "horizons":[
-    {"days":"3-5","direction":"","focus":[],"brief":"","risk":""},
-    {"days":"5-10","direction":"","focus":[],"brief":"","risk":""},
-    {"days":"10-15","direction":"","focus":[],"brief":"","risk":""}
+    {"days":"3-5","direction":"","direction_en":"","focus":[],"brief":"","brief_en":"","risk":"","risk_en":""},
+    {"days":"5-10","direction":"","direction_en":"","focus":[],"brief":"","brief_en":"","risk":"","risk_en":""},
+    {"days":"10-15","direction":"","direction_en":"","focus":[],"brief":"","brief_en":"","risk":"","risk_en":""}
   ],
   "actions":{"watch":[],"prepare":[],"avoid":[]},
-  "flows":[{"from":"","to":"","brief":""}],
-  "logic":[{"cause":"","middle":"","result":"","action":""}],
-  "media_themes":[{"title":"","tone":"积极|谨慎|中性","brief":"","impact":"","sources":[]}],
-  "predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]
+  "actions_en":{"watch":[],"prepare":[],"avoid":[]},
+  "flows":[{"from":"","to":"","brief":"","brief_en":""}],
+  "logic":[{
+    "cause":"","cause_en":"",
+    "middle":"","middle_en":"",
+    "result":"","result_en":"",
+    "action":"","action_en":""
+  }],
+  "media_themes":[{
+    "title":"","title_en":"",
+    "tone":"积极|谨慎|中性","tone_en":"Positive|Cautious|Neutral",
+    "brief":"","brief_en":"",
+    "impact":"","impact_en":"",
+    "sources":[]
+  }],
+  "predictions":[{
+    "horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,
+    "thesis":"","thesis_en":"",
+    "invalidation":"","invalidation_en":"",
+    "sensors":[],"evidence_ids":[]
+  }]
 }
 
 总原则：高信息密度，惜字如金。不是“写长”，而是“每句话都有用”。
 
 写作纪律：
-1. 只输出JSON；除股票代码、来源名外，全部简体中文。
-2. 只依据输入证据；禁止补造数字、时间、人物、预期或新闻。
-3. 未经官方确认的信息写“据报道/尚待确认/市场传闻”，不得写成既定事实。
-4. 每句话至少承担一项功能：事实、数字、预期差、因果、资产影响、触发条件；没有功能就删。
-5. 优先结构：“事件/数据 → 预期差 → 传导 → 资产”；能用40字说清，不写80字。
-6. 同一事实只出现一次；不同模块不得反复复述同一结论。
-7. 禁止套话：值得关注、密切留意、市场正在关注、可能产生一定影响、从某种程度上、整体来看、需要注意的是。
-8. 结论先行；少形容词、少铺垫、少重复。
+1. 只输出JSON。中文字段保持原字段名；对应英文统一使用 `_en` 后缀。
+2. 中文是主判断，英文只能忠实表达同一判断，禁止重新分析、改变方向、增删事实或增加中文没有的信息。
+3. ticker、资产代码、数字、日期、概率、source、evidence_ids保持一致，不翻译、不改写。
+4. 英文使用简洁的 institutional market research 风格；同样惜字如金，不逐字翻译中文套话。
+5. `actions_en` 必须与 `actions` 三组逐项一一对应、顺序一致。
+6. 只依据输入证据；禁止补造数字、时间、人物、预期或新闻。
+7. 未经官方确认的信息，中文写“据报道/尚待确认/市场传闻”，英文对应写 `reported / unconfirmed / market reports` 等同等限定语，不得写成既定事实。
+8. 每句话至少承担一项功能：事实、数字、预期差、因果、资产影响、触发条件；没有功能就删。
+9. 优先结构：“事件/数据 → 预期差 → 传导 → 资产”；能用40字说清，不写80字；英文保持同等密度。
+10. 同一事实只出现一次；不同模块不得反复复述同一结论。
+11. 中文禁止套话：值得关注、密切留意、市场正在关注、可能产生一定影响、从某种程度上、整体来看、需要注意的是；英文也禁止对应空话。
+12. 结论先行；少形容词、少铺垫、少重复。
 
 direction：
-- title 12-24字，直写核心矛盾。
-- brief 70-100字：串联2-4个关键变量，必须含“主线 + 关键验证点”；不列新闻清单。
-- bias 只给最终倾向。
+- title 12-24字，直写核心矛盾；title_en为同义精炼英文标题。
+- brief 70-100字：串联2-4个关键变量，必须含“主线 + 关键验证点”；brief_en表达完全相同的信息。
+- bias 只给最终倾向；bias_en严格对应，不得改变倾向。
 
 horizons：
 - 正好三项：3-5、5-10、10-15。
-- brief 50-75字：判断→核心依据→确认条件。
+- direction / brief / risk 为中文；direction_en / brief_en / risk_en为完全对应英文。
+- brief 50-75字：判断→核心依据→确认条件；英文保持同等信息密度。
 - risk 30-50字：只写最关键失效条件。
-- focus 最多4个，只留真正相关标的。
+- focus 最多4个，只留真正相关标的；focus中资产代码不翻译。
 
 actions：
-- watch / prepare / avoid 每组最多4项。
-- 每项35-55字，尽量用“标的：动作；原因；触发/停止条件”。
+- actions 与 actions_en 的 watch / prepare / avoid 每组最多4项，数量、顺序、标的一一对应。
+- 中文每项35-55字，尽量用“标的：动作；原因；触发/停止条件”；英文用同样结构压缩表达。
 - 禁止空泛“等待观察”；必须说明等什么。
 
 flows：
-- 最多4项；brief 35-55字。
+- 最多4项；brief 35-55字，brief_en为等义英文。
+- from/to资产代码保持不变。
 - 仅表示相对配置倾向/潜在轮动；没有直接资金流证据，不得声称真实资金已经迁移。
 - 必须解释A为何弱/强、B为何受益/承压。
 
 logic：
 - 最多6项；宁缺毋滥。
-- cause / middle / result / action 各写一个信息点。
-- 每项形成“事实/催化 → 中间变量 → 资产结果 → 动作”。
+- cause / middle / result / action 为中文；对应 `_en` 字段必须逐项同义。
+- 各字段只写一个信息点，形成“事实/催化 → 中间变量 → 资产结果 → 动作”。
 - 优先覆盖真正有证据的利率、美元、通胀/商品、风险偏好、市场宽度、行业轮动、海外市场。
 
 media_themes：
 - 最多5项；优先“即将落地的硬事件 + 正在发酵的暗线”。
+- title / brief / impact 为中文；title_en / brief_en / impact_en为同义英文；tone_en与tone严格对应。
 - title 12-28字，直接写事件。
 - brief 50-80字：事实 + 关键数字/状态 + 预期差；禁止背景科普。
 - impact 35-60字：传导链 + 受影响资产 + 下一验证点。
-- sources 仅列真实支持该主题的输入来源。
+- sources 仅列真实支持该主题的输入来源，来源名保持原文。
 - 一个主题只讲一件事。
 
 predictions：
 - 周期仅3/5/10/15，概率0.50-0.80。
+- target / direction / probability / sensors / evidence_ids为中英文共用结构。
+- thesis / invalidation 为中文；thesis_en / invalidation_en为完全对应英文。
 - 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
 - thesis 必须是“证据→方向”的短因果链；invalidation 必须可观察。
-- 没有优势写“等待确认”，不硬凑方向。
+- 没有优势写“等待确认”，英文对应 `Wait for confirmation`，不硬凑方向。
 
 最终自检：
 删掉任何不影响结论的句子；删掉重复观点；删掉没有事实、数字、因果或动作的句子。
 """
 
         system_prompt = (
-            "你是中文跨资产首席研究员兼信息编辑。"
-            "把大量证据压缩成高密度研究结论：事实优先、数字优先、因果优先、动作优先。"
-            "惜字如金；删除铺垫、套话、重复和无效形容词。"
-            "每句话都要提供新信息。只依据输入证据，不承诺收益，严格输出JSON。"
+            "你是中英双语跨资产首席研究员兼信息编辑。"
+            "先形成唯一投资判断，再用高密度中文和专业英文表达同一判断；英文不是第二次分析。"
+            "事实优先、数字优先、因果优先、动作优先；惜字如金，删除铺垫、套话、重复和无效形容词。"
+            "中英文事实、方向、动作、触发和失效条件必须一致。"
+            "只依据输入证据，不承诺收益，严格输出JSON。"
         )
         parsed = self._complete_json("master", system_prompt, prompt)
 
@@ -1011,7 +1042,7 @@ predictions：
         prediction_prompt += "\n预测对象分组：\n" + json.dumps(PREDICTION_GROUPS, ensure_ascii=False)
         prediction_prompt += """
 \n请单独生成跨资产预测，只输出以下JSON：
-{"predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","invalidation":"","sensors":[],"evidence_ids":[]}]}
+{"predictions":[{"horizon_days":5,"target":"SPY","direction":"UP","probability":0.60,"thesis":"","thesis_en":"","invalidation":"","invalidation_en":"","sensors":[],"evidence_ids":[]}]}
 
 必须正好4项且target互不重复。
 选择原则：
@@ -1023,15 +1054,17 @@ predictions：
 6. 只能从“允许预测的完整对象”中选择；不能凭记忆添加其他标的。
 7. 不得4项全部表达同一方向或同一风险因子；优先保持跨资产分散。
 8. 必须优先参考1日/5日/20日变化、20日波动率、MA20位置，再结合新闻/政策；不因知名度高而优先。
-9. thesis 45-70字：只写“量化状态 + 催化/宏观变量 → 方向”；不得复述市场背景。
-10. invalidation 25-45字：必须可观察；sensors优先2-3个真正能验证判断的变量。
+9. thesis 45-70字：只写“量化状态 + 催化/宏观变量 → 方向”；thesis_en为同义精炼英文，不得增加新事实。
+10. invalidation 25-45字：必须可观察；invalidation_en严格对应；sensors优先2-3个真正能验证判断的变量。
 11. 每项至少包含一个输入中的量化状态或具体事件，不写纯主观判断。
-12. 周期仅3/5/10/15；概率0.50-0.80。
-13. 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
+12. 中英文必须共享同一 target、direction、probability、sensors、evidence_ids；不得出现方向不一致。
+13. 周期仅3/5/10/15；概率0.50-0.80。
+14. 绝对方向UP/DOWN/NEUTRAL；相对方向OUTPERFORM/UNDERPERFORM/NEUTRAL。
 """
         prediction_system = (
-            "你是跨资产预测负责人。结论必须短、硬、可验证："
-            "量化状态→催化→方向→失效条件。拒绝套话和重复，严格输出JSON。"
+            "你是中英双语跨资产预测负责人。先形成唯一预测，再输出中文与对应英文。"
+            "结论必须短、硬、可验证：量化状态→催化→方向→失效条件。"
+            "英文不得改变中文方向或增加事实；拒绝套话和重复，严格输出JSON。"
         )
         prediction_result = self._complete_json(
             "cross_asset_predictions", prediction_system, prediction_prompt
@@ -1081,34 +1114,45 @@ predictions：
             company_prompt += """
 \n从上述候选中按“增量信息强度 + 价格反应 + 风险收益比 + 行业分散”排序，
 输出最多12个候选，系统随后会再压缩到最终8个。JSON格式：
-{"company_signals":[{"company":"中文公司名","ticker":"股票代码","stance":"关注|等待|回避","brief":"事实→股票影响→动作","trigger":"何种可观察条件出现才行动","risk":"最大风险或失效条件","source":"输入中的来源名"}]}
+{"company_signals":[{
+  "company":"中文公司名","company_en":"English company name",
+  "ticker":"股票代码",
+  "stance":"关注|等待|回避","stance_en":"WATCH|WAIT|AVOID",
+  "brief":"事实→股票影响→动作","brief_en":"same thesis in concise English",
+  "trigger":"何种可观察条件出现才行动","trigger_en":"same trigger in concise English",
+  "risk":"最大风险或失效条件","risk_en":"same risk in concise English",
+  "source":"输入中的来源名"
+}]}
 
 硬约束：
 1. 只输出JSON；ticker只能来自“今日二次筛选后的候选代码”，禁止从记忆补充其他股票。
-2. 除ticker和source外全部使用简体中文。
-3. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息且“下一步动作清晰”的股票。
-4. 必须综合 candidate_score、news_event_score、setup_type、setup_score；不能把最终名单简单变成“当日涨幅榜”。
-5. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
-6. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
+2. 中文字段保持原字段名；英文使用 `_en` 后缀。ticker和source中英文共用。
+3. 英文必须忠实表达中文同一结论，不得重新分析、改变stance、增删事实或补充中文没有的数字。
+4. stance_en严格映射：关注=WATCH，等待=WAIT，回避=AVOID。
+5. company_en优先使用输入中明确出现的官方/常用英文公司名；无法可靠确定时使用ticker，不猜名称。
+6. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息且“下一步动作清晰”的股票。
+7. 必须综合 candidate_score、news_event_score、setup_type、setup_score；不能把最终名单简单变成“当日涨幅榜”。
+8. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
+9. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
    A. 上升趋势中的可控回撤/止跌；
    B. 放量突破或趋势重新转强，但触发条件必须防止追高。
-7. setup_type=overextended 的股票原则上不得标“关注”，除非事件极强且触发条件明确要求回踩/整理后再参与。
-8. setup_type=risk_breakdown 且存在基本面或事件利空时，应优先考虑“回避”，不能机械抄底。
-9. “等待”用于方向尚可但价格、成交量或事件确认不足的股票；不要因为措辞保守而把所有股票都写成“等待”。
-10. 若候选中确有满足条件的机会，优先给出2-4只行业分散的“关注”；若存在明确破位/重大利空，也应给出1-2只“回避”。没有合格对象时可以不凑数量。
-11. 不能只凭网站介绍或单条媒体标题；公司官网若只有宣传性内容，不得作为主要论据。
-12. brief 65-85字，固定顺序：“核心事实/催化 → 价格或基本面含义 → 当前动作”。至少包含一个具体事实；有关键数字时优先引用。
-13. trigger 30-45字，只写升级/执行所需的可观察条件；禁止“等待进一步确认”这类空话。
-14. risk 30-45字，只写最可能使当前逻辑失效的风险；不同公司不得复制同一句风险。
-15. source必须是真实输入来源；只有媒体消息时，brief保留“据报道/尚待确认”。
-16. 能用短句不用长句；删除公司背景、行业科普、重复评价。
-17. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
+10. setup_type=overextended 的股票原则上不得标“关注”，除非事件极强且触发条件明确要求回踩/整理后再参与。
+11. setup_type=risk_breakdown 且存在基本面或事件利空时，应优先考虑“回避”，不能机械抄底。
+12. “等待”用于方向尚可但价格、成交量或事件确认不足的股票；不要因为措辞保守而把所有股票都写成“等待”。
+13. 若候选中确有满足条件的机会，优先给出2-4只行业分散的“关注”；若存在明确破位/重大利空，也应给出1-2只“回避”。没有合格对象时可以不凑数量。
+14. 不能只凭网站介绍或单条媒体标题；公司官网若只有宣传性内容，不得作为主要论据。
+15. brief 65-85字，固定顺序：“核心事实/催化 → 价格或基本面含义 → 当前动作”；brief_en表达同样三层信息，保持同等密度，不逐字翻译。
+16. trigger 30-45字，只写升级/执行所需的可观察条件；trigger_en严格对应；禁止空泛“等待进一步确认”。
+17. risk 30-45字，只写最可能使当前逻辑失效的风险；risk_en严格对应；不同公司不得复制同一句风险。
+18. source必须是真实输入来源；只有媒体消息时，中文brief与英文brief_en都保留同等“据报道/尚待确认”限定。
+19. 中英文都能用短句不用长句；删除公司背景、行业科普、重复评价。
+20. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
 """
             company_system = (
-                "你是中文美股研究负责人。候选已通过量价和新闻初筛。"
-                "只保留最有增量信息、风险收益比和动作价值的股票。"
-                "每只股票按“事实/催化→市场含义→动作→触发→失效”压缩表达；"
-                "惜字如金，不写公司介绍，不把涨幅榜当精选榜。"
+                "你是中英双语美股研究负责人。候选已通过量价和新闻初筛。"
+                "先形成唯一股票判断，再分别输出高密度中文与专业英文；英文不是第二次分析。"
+                "每只股票按“事实/催化→市场含义→动作→触发→失效”压缩表达。"
+                "中英文事实、stance、trigger、risk必须一致；惜字如金，不写公司介绍，不把涨幅榜当精选榜。"
                 "只依据输入证据，严格输出JSON。"
             )
             company_result = self._complete_json("company", company_system, company_prompt)
