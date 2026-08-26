@@ -61,6 +61,10 @@ SOURCE_LABELS = {
     "Eli Lilly IR": "礼来公告", "UnitedHealth IR": "联合健康公告",
     "Caterpillar IR": "卡特彼勒公告", "Goldman Sachs IR": "高盛公告",
     "Visa IR": "维萨公告",
+    "Michigan Surveys of Consumers": "密歇根大学消费者调查",
+    "ISM": "美国供应管理协会",
+    "ISM PMI Calendar": "美国供应管理协会",
+    "Federal Reserve Next Month": "美联储",
 }
 
 COMPANY_LABELS = {
@@ -543,12 +547,16 @@ def _calendar(context):
         for index, event in enumerate(by_date.get(current_text, []), 1):
             raw_title = event.get("title")
             title = translate_event_title(raw_title)
-            raw_source = str(event.get("source", ""))
-            source = SOURCE_LABELS.get(raw_source, "官方来源")
+            raw_source = str(event.get("source", "")).strip()
+            source = SOURCE_LABELS.get(raw_source) or raw_source
+            source_html = (
+                f"<small{_i18n_attr(_source_i18n(raw_source))}>{esc(source)}</small>"
+                if source else ""
+            )
             body.append(
                 f"<div class='event'><span>{index:02d}</span>"
                 f"<strong{_i18n_attr(_event_title_i18n(raw_title))}>{esc(title)}</strong>"
-                f"<small{_i18n_attr(_source_i18n(raw_source))}>{esc(source)}</small></div>"
+                f"{source_html}</div>"
             )
         if not body:
             empty_i18n = {
@@ -625,10 +633,18 @@ def _source_cards(context, kind):
             if not _has_chinese(brief):
                 continue
             ticker = str(item.get("ticker") or "").strip().upper()
-            company = COMPANY_NAMES.get(ticker) or str(item.get("company") or "").strip()
-            if not _has_chinese(company):
-                company = COMPANY_LABELS.get(ticker) or COMPANY_LABELS.get(company.upper()) or "重点公司"
-            title = f"{company}（{ticker}）" if ticker else company
+            raw_company = str(item.get("company") or "").strip()
+            raw_company_en = str(item.get("company_en") or "").strip()
+
+            company = (
+                COMPANY_NAMES.get(ticker)
+                or COMPANY_LABELS.get(ticker)
+                or (COMPANY_LABELS.get(raw_company.upper()) if raw_company else "")
+                or raw_company
+                or raw_company_en
+                or ticker
+            )
+            title = f"{company}（{ticker}）" if ticker and company != ticker else company
 
             title_i18n = {}
             for code in LANG_CODES:
@@ -669,15 +685,13 @@ def _source_cards(context, kind):
                 source_names = [market_source]
                 source_urls[market_source] = f"https://finance.yahoo.com/quote/{ticker}/"
         else:
-            title = item.get("title") or "市场主题"
+            title = str(item.get("title") or "").strip()
             title_i18n = _field_i18n(item, "title")
             label = item.get("tone") or "中性"
             label_i18n = _field_i18n(item, "tone")
             brief = str(item.get("brief") or "").strip()
-            if not _has_chinese(brief):
+            if not title or not brief or not _has_chinese(brief):
                 continue
-            if not _has_chinese(title):
-                title = "市场主题"
             impact = str(item.get("impact") or "").strip()
             source_names = [str(x) for x in item.get("sources", [])]
 
@@ -703,7 +717,11 @@ def _source_cards(context, kind):
                     f"<span class='source-static'{label_attr}>{esc(source_label)}</span>"
                 )
 
-        links_html = "".join(source_links) or "<span>公开来源</span>"
+        links_html = "".join(source_links)
+        source_links_html = (
+            f"<div class='source-links'>{links_html}</div>"
+            if links_html else ""
+        )
         details = ""
 
         if kind == "company":
@@ -771,7 +789,7 @@ def _source_cards(context, kind):
             f"<div class='card-label'{_i18n_attr(label_i18n)}>{esc(label)}</div>"
             f"<h3{_i18n_attr(title_i18n)}>{esc(title)}</h3>"
             f"<p{_i18n_attr(_field_i18n(item, 'brief'))}>{esc(brief)}</p>"
-            f"{details}<div class='source-links'>{links_html}</div></div>"
+            f"{details}{source_links_html}</div>"
         )
 
     if curated_cards:
@@ -921,7 +939,7 @@ def render_report(context: dict) -> str:
     gate = context["gate"]
     failures = context.get("core_failures", [])
     audit_class = "audit-ok" if gate.allowed else "audit-warn"
-    audit_title = "核心官方来源本轮读取正常" if gate.allowed else "数据存在缺口，本轮不冻结预测"
+    audit_title = "核心数据源本轮读取正常" if gate.allowed else "数据存在缺口，本轮不冻结预测"
     report_date = str(context.get("report_date") or date.today().isoformat())[:10]
     report_time = datetime.now(ZoneInfo("America/Denver")).strftime("%H:%M")
     seal_data_uri = _seal_data_uri()
@@ -936,7 +954,7 @@ def render_report(context: dict) -> str:
     integrity_zh = f"{audit_title}　核心失败：{failures_text}　门槛原因：{reasons_text}"
 
     integrity_i18n = {
-        "zh_tw": ("核心官方來源本輪讀取正常" if gate.allowed else "資料存在缺口，本輪不凍結預測")
+        "zh_tw": ("核心資料源本輪讀取正常" if gate.allowed else "資料存在缺口，本輪不凍結預測")
                  + f"　核心失敗：{failures_text}　門檻原因：{reasons_text}",
         "en": ("Core official sources loaded normally" if gate.allowed else "Data gaps detected; forecasts not frozen")
               + f"  Core failures: {' · '.join(failures) or 'None'}  Gate reasons: {', '.join(gate.reasons) or 'None'}",
