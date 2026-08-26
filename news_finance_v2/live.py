@@ -195,20 +195,285 @@ def _filter_raw_calendar_events(events, *, start: date, days: int = 14):
     return sorted(selected, key=lambda x: (x["date"], x["title"]))
 
 
-def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, days: int = 14):
+
+_MONTH_NUM = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+}
+_MONTH_ABBR_NUM = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+
+def _calendar_date_for_month_day(month: int, day: int, *, start: date) -> date | None:
+    year = start.year
+    # If a 14-day window crosses New Year, allow January to belong to next year.
+    if start.month >= 11 and month <= 2:
+        year += 1
+    try:
+        return date(year, month, day)
+    except ValueError:
+        return None
+
+
+def _calendar_local_importance(title: str) -> int:
+    """Deterministic market-impact score used for ranking verified dated events."""
+    value = " ".join(str(title or "").lower().split())
+
+    if "personal income and outlays" in value or "pce" in value:
+        return 100
+    if ("chair" in value or "主席" in value) and ("jackson hole" in value or "fed" in value or "federal reserve" in value):
+        return 99
+    if "employment situation" in value or "nonfarm" in value or "非农" in value:
+        return 98
+    if "nvidia" in value and ("financial results" in value or "earnings" in value or "财报" in value):
+        return 97
+    if "consumer price index" in value or re.search(r"\bcpi\b", value):
+        return 96
+    if "gdp" in value and ("estimate" in value or "国内生产总值" in value):
+        return 93
+    if "manufacturing pmi" in value:
+        return 91
+    if "consumer sentiment" in value or "inflation expectation" in value or "密歇根" in value:
+        return 90
+    if "job openings and labor turnover" in value or "jolts" in value:
+        return 89
+    if "services pmi" in value:
+        return 88
+    if "producer price index" in value or re.search(r"\bppi\b", value):
+        return 87
+    if "treasury" in value and "auction" in value:
+        return 82
+    if "productivity and costs" in value:
+        return 72
+    if "international trade" in value or "trade in goods and services" in value:
+        return 70
+    if _is_market_relevant_raw_event(title):
+        return 65
+    return 0
+
+
+def _event_title_key(title: str) -> str:
+    value = str(title or "").lower()
+    aliases = (
+        ("personal income and outlays", "pce"),
+        ("pce price index", "pce"),
+        ("gdp (second estimate)", "gdp"),
+        ("gdp second estimate", "gdp"),
+        ("employment situation", "nonfarm"),
+        ("job openings and labor turnover survey", "jolts"),
+        ("nvidia 2nd quarter fy27 financial results", "nvidiaearnings"),
+        ("nvidia second-quarter financial results", "nvidiaearnings"),
+        ("chairman kevin warsh", "fedchair"),
+        ("jackson hole", "fedchair"),
+        ("consumer sentiment", "michigan"),
+        ("manufacturing pmi", "ismmanufacturing"),
+        ("services pmi", "ismservices"),
+    )
+    for needle, key in aliases:
+        if needle in value:
+            return key
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value)
+
+
+def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, days: int = 14):
     """
-    Normalize AI-selected high-impact events for the existing calendar UI.
-
-    Contract intentionally stays unchanged:
-      {"date": "YYYY-MM-DD", "title": "...", "source": "..."}
-
-    Extra AI fields such as importance/category are discarded before display.
+    Deterministically extract dated events from dedicated official/IR schedule pages.
+    The AI may rank events, but it no longer has to invent dates from prose.
     """
     end = start + timedelta(days=days)
-    normalized = []
-    seen = set()
-    per_day = {}
+    soup = BeautifulSoup(html_text or "", "html.parser")
+    plain = _page_text(html_text or "")
+    events = []
 
+    def add(event_date: date | None, title: str, source: str):
+        if event_date is None or not (start <= event_date < end):
+            return
+        title = " ".join(str(title or "").split()).strip()
+        if not title:
+            return
+        events.append({
+            "date": event_date.isoformat(),
+            "title": title,
+            "source": source,
+        })
+
+    # BEA release schedule: table rows contain month/day/time + release title.
+    if name == "BEA":
+        for row in soup.find_all("tr"):
+            row_text = " ".join(row.stripped_strings)
+            match = re.search(
+                r"\b(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{1,2})\s+\d{1,2}:\d{2}\s*(?:AM|PM)\b",
+                row_text,
+                re.I,
+            )
+            if not match:
+                continue
+            month = _MONTH_NUM[match.group(1).lower()]
+            event_date = _calendar_date_for_month_day(month, int(match.group(2)), start=start)
+            title = row_text[match.end():].strip()
+            title = re.sub(r"^(?:News|Data|Article)\s+", "", title, flags=re.I)
+            title = re.sub(r"\s+View$", "", title, flags=re.I)
+            if title:
+                add(event_date, title, "BEA")
+
+    # Federal Reserve calendar: for chair speeches, the date number often follows
+    # the speech details in the page's accessible text.
+    if name.startswith("Federal Reserve"):
+        month_year = re.search(
+            r"\b(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{4})\b",
+            plain,
+            re.I,
+        )
+        if month_year:
+            month = _MONTH_NUM[month_year.group(1).lower()]
+            year = int(month_year.group(2))
+            lines = plain.splitlines()
+            for i, line in enumerate(lines):
+                low = line.lower()
+                if "speech - chairman" not in low and not ("chairman" in low and "speech" in low):
+                    continue
+                nearby = lines[i:i + 12]
+                day_num = None
+                for candidate in nearby[1:]:
+                    if re.fullmatch(r"\d{1,2}", candidate.strip()):
+                        day_num = int(candidate.strip())
+                        break
+                if not day_num:
+                    continue
+                try:
+                    event_date = date(year, month, day_num)
+                except ValueError:
+                    continue
+                detail = " ".join(nearby).lower()
+                title = "Fed主席Jackson Hole讲话" if "jackson hole" in detail else "Fed主席讲话"
+                add(event_date, title, "Federal Reserve")
+
+    # Michigan: "Next data release: Friday, August 28, 2026 ... Final August data".
+    if name == "Michigan Surveys of Consumers":
+        match = re.search(
+            r"Next data release:\s*(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
+            r"(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{1,2}),\s+(\d{4})",
+            plain,
+            re.I,
+        )
+        if match:
+            month = _MONTH_NUM[match.group(1).lower()]
+            add(
+                date(int(match.group(3)), month, int(match.group(2))),
+                "密歇根消费者信心终值",
+                "Michigan Surveys of Consumers",
+            )
+
+    # NVIDIA home/events page.
+    if name == "NVIDIA IR":
+        lines = plain.splitlines()
+        for i, line in enumerate(lines):
+            if "NVIDIA 2nd Quarter FY27 Financial Results" not in line:
+                continue
+            window = lines[max(0, i - 4):i + 3]
+            date_match = None
+            for candidate in window:
+                date_match = re.search(
+                    r"\b(" + "|".join(_MONTH_ABBR_NUM) + r")\s+(\d{1,2}),\s+(\d{4})\b",
+                    candidate,
+                    re.I,
+                )
+                if date_match:
+                    break
+            if date_match:
+                month = _MONTH_ABBR_NUM[date_match.group(1).lower()]
+                add(
+                    date(int(date_match.group(3)), month, int(date_match.group(2))),
+                    "NVIDIA FY2027 Q2财报",
+                    "NVIDIA IR",
+                )
+
+    # ISM official 2026 release-date table.
+    if name == "ISM PMI Calendar":
+        for row in soup.find_all("tr"):
+            cells = [" ".join(cell.stripped_strings) for cell in row.find_all(["th", "td"])]
+            if len(cells) < 3:
+                continue
+            month_match = re.search(
+                r"\b(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{4})\b",
+                cells[0],
+                re.I,
+            )
+            if not month_match:
+                continue
+            month = _MONTH_NUM[month_match.group(1).lower()]
+            year = int(month_match.group(2))
+            nums = []
+            for cell in cells[1:3]:
+                m = re.search(r"\b(\d{1,2})\b", cell)
+                nums.append(int(m.group(1)) if m else None)
+            if nums[0]:
+                add(date(year, month, nums[0]), "ISM制造业PMI", "ISM")
+            if nums[1]:
+                add(date(year, month, nums[1]), "ISM服务业PMI", "ISM")
+
+    # Deduplicate source parser output.
+    deduped = []
+    seen = set()
+    for item in events:
+        key = (item["date"], _event_title_key(item["title"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, days: int = 14, target_count: int = 8):
+    """
+    Build the displayed calendar from verified dated candidates first.
+
+    Rules:
+    - If at least 8 verified/high-confidence events exist, display exactly 8.
+    - If fewer than 8 exist, display fewer; never fabricate.
+    - Raw official/IR parsed dates outrank AI-only dates.
+    - AI-only events are fallback candidates and cannot overwrite a verified
+      event with a conflicting date.
+    """
+    end = start + timedelta(days=days)
+    candidates = []
+    title_keys_from_verified = set()
+
+    # 1) Verified structured candidates from BLS ICS and dedicated schedule parsers.
+    for item in raw_events or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            event_date = date.fromisoformat(str(item.get("date", ""))[:10])
+        except ValueError:
+            continue
+        if not (start <= event_date < end):
+            continue
+        title = " ".join(str(item.get("title") or "").split()).strip()
+        source = " ".join(str(item.get("source") or "").split()).strip() or "官方来源"
+        if not title:
+            continue
+
+        score = _calendar_local_importance(title)
+        if score < 58:
+            continue
+
+        title_key = _event_title_key(title)
+        title_keys_from_verified.add(title_key)
+        candidates.append({
+            "date": event_date.isoformat(),
+            "title": title,
+            "source": source,
+            "_importance": score,
+            "_verified": True,
+            "_title_key": title_key,
+        })
+
+    # 2) AI may discover explicit policy/geopolitical/company dates from other evidence.
+    #    It can add events, but cannot replace a verified event's date.
     if not isinstance(ai_events, list):
         ai_events = []
 
@@ -227,48 +492,70 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
         if not title or not source:
             continue
 
+        title_key = _event_title_key(title)
+        if title_key in title_keys_from_verified:
+            # This is the safeguard that prevents, for example, an AI-parsed
+            # Jackson Hole speech from moving from the verified Aug 28 date to Aug 27.
+            continue
+
         try:
-            importance = int(float(item.get("importance", 0)))
+            ai_score = int(float(item.get("importance", 0)))
         except (TypeError, ValueError):
-            importance = 0
-
-        # A calendar item must clear a meaningful market-impact threshold.
-        # This prevents "official but irrelevant" releases from filling the grid.
-        if importance < 58:
+            ai_score = 0
+        local_score = _calendar_local_importance(title)
+        score = max(local_score, min(ai_score, 92))
+        if score < 58:
             continue
 
-        normalized_key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", title.lower())
-        key = (event_date.isoformat(), normalized_key)
-        if key in seen:
-            continue
-
-        # Avoid one busy day swallowing the whole calendar.
-        day_key = event_date.isoformat()
-        if per_day.get(day_key, 0) >= 3:
-            continue
-
-        seen.add(key)
-        per_day[day_key] = per_day.get(day_key, 0) + 1
-        normalized.append({
-            "date": day_key,
+        candidates.append({
+            "date": event_date.isoformat(),
             "title": title,
             "source": source,
-            "_importance": importance,
+            "_importance": score,
+            "_verified": False,
+            "_title_key": title_key,
         })
 
-    # AI list is expected to be ranked, but enforce deterministic sorting:
-    # date first, then higher importance first.
-    normalized.sort(key=lambda x: (x["date"], -x["_importance"], x["title"]))
+    # 3) Deduplicate by conceptual title. Prefer verified, then higher impact.
+    best_by_title = {}
+    for item in candidates:
+        key = item["_title_key"]
+        current = best_by_title.get(key)
+        if current is None:
+            best_by_title[key] = item
+            continue
+        current_rank = (1 if current["_verified"] else 0, current["_importance"])
+        item_rank = (1 if item["_verified"] else 0, item["_importance"])
+        if item_rank > current_rank:
+            best_by_title[key] = item
 
-    if normalized:
-        return [
-            {"date": x["date"], "title": x["title"], "source": x["source"]}
-            for x in normalized
-        ]
+    ranked = list(best_by_title.values())
+    ranked.sort(
+        key=lambda x: (
+            -x["_importance"],
+            0 if x["_verified"] else 1,
+            x["date"],
+            x["title"],
+        )
+    )
 
-    # If AI cannot establish any reliable dated event, show only genuinely
-    # market-relevant official raw events; blank dates are preferable to filler.
-    return _filter_raw_calendar_events(raw_events, start=start, days=days)
+    # 4) Keep at most 3 per day, and exactly target_count when enough exist.
+    selected = []
+    per_day = {}
+    for item in ranked:
+        if per_day.get(item["date"], 0) >= 3:
+            continue
+        selected.append(item)
+        per_day[item["date"]] = per_day.get(item["date"], 0) + 1
+        if len(selected) >= target_count:
+            break
+
+    selected.sort(key=lambda x: (x["date"], -x["_importance"], x["title"]))
+    return [
+        {"date": x["date"], "title": x["title"], "source": x["source"]}
+        for x in selected
+    ]
+
 
 
 def _dedicated_calendar_specs(report_date: date):
@@ -309,6 +596,12 @@ def _dedicated_calendar_specs(report_date: date):
         (
             "NVIDIA IR",
             "https://investor.nvidia.com/home/default.aspx",
+            "calendar",
+            False,
+        ),
+        (
+            "ISM PMI Calendar",
+            "https://www.ismworld.org/supply-management-news-and-reports/reports/rob-report-calendar/",
             "calendar",
             False,
         ),
@@ -1108,7 +1401,7 @@ class HttpCollector:
             # Skipped for externally mocked sessions so existing finite-session tests
             # do not need extra mocked HTTP responses.
             calendar_specs = _dedicated_calendar_specs(self.settings.report_date)
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=6) as executor:
                 records += list(executor.map(lambda spec: self._fetch(*spec), calendar_specs))
 
         market = self.market_loader(list(SIGNALS))
@@ -1175,9 +1468,24 @@ class HttpCollector:
             text = _page_text(response.text) if status == "SUCCESS" else ""
             if status == "SUCCESS" and len(text) < 40:
                 status = "EMPTY"
+            parsed_events = []
+            if status == "SUCCESS":
+                if name == "BLS":
+                    parsed_events = parse_ics_events(
+                        response.text,
+                        start=self.settings.report_date,
+                    )
+                elif kind == "calendar":
+                    parsed_events = _parse_dedicated_calendar_events(
+                        name,
+                        response.text,
+                        start=self.settings.report_date,
+                        days=14,
+                    )
+
             return {"name": name, "url": url, "final_url": str(response.url), "kind": kind,
                     "core": core, "status": status, "text": text,
-                    "events": parse_ics_events(response.text, start=self.settings.report_date) if name == "BLS" and status == "SUCCESS" else [],
+                    "events": parsed_events,
                     "message": ""}
         except StopIteration as exc:
             return {
@@ -1490,14 +1798,14 @@ media_themes：
 events（这是“未来14日日历”的最终展示事件，必须严筛）：
 - 日历形式不变，但禁止“为了填格子而填格子”；没有高影响事件的日期可以留空。
 - 只选输入证据中明确给出未来日期、且可能显著影响美股/美债/美元/黄金/原油/主要行业的事件。
-- 目标5-10项、最多12项；单日最多3项；按市场重要性排序并给 importance 0-100。
-- importance < 58 的事件不要输出；但禁止为凑数量加入与美股定价弱相关的统计发布。
+- 固定目标8项；如果输入中存在至少8个经明确日期证据确认的高影响事件，必须输出8项；只有经核实候选不足8个时才允许少于8项。
+- 单日最多3项；按市场重要性排序并给 importance 0-100。importance < 58 不得输出；禁止为了凑8项加入与美股定价弱相关的统计发布。
 - 优先级：
   A级：FOMC、Fed主席/杰克逊霍尔、CPI、核心PCE、非农、GDP、重大关税/制裁/政策节点；
   B级：PPI、零售销售、ISM/JOLTS/消费者通胀预期、10Y/30Y国债拍卖、OPEC+、大型权重股/行业龙头财报；
   C级：只有在当前市场主线高度相关时才保留其他官方数据。
 - 大型公司财报只有在输入中存在明确日期证据时才能进入；公司IR Events/Press Release属于有效日期证据，禁止凭记忆补财报日期。
-- Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期属于有效日程证据，应主动提取而不是忽略。
+- Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期、ISM官方PMI发布日历属于有效日程证据，应主动提取而不是忽略。
 - 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入；单纯评论或已发生新闻不进入未来日历。
 - BLS的普通统计发布不是天然重要。明确排除：暑期青年劳动力、休假获取与使用、职业展望手册、县级就业工资、初步基准等低交易价值项目。
 - 同一事件多来源重复时只保留一项；优先 source：官方机构 > 公司IR > Reuters/FT/AP/CNBC等主流媒体。
@@ -1543,6 +1851,7 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
             collected.get("events", []),
             start=self.settings.report_date,
             days=14,
+            target_count=8,
         )
         parsed["events"] = curated_events
         collected["events"] = curated_events
