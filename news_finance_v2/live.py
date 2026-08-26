@@ -248,7 +248,19 @@ def _calendar_local_importance(title: str) -> int:
         return 82
     if "productivity and costs" in value:
         return 72
-    if "international trade" in value or "trade in goods and services" in value:
+    if "durable goods" in value or "耐用品" in value:
+        return 86
+    if "new home sales" in value or "new residential sales" in value or "新屋销售" in value:
+        return 78
+    if "eia" in value and ("petroleum" in value or "原油库存" in value):
+        return 84
+    if "construction spending" in value or "建筑支出" in value:
+        return 68
+    if "factory orders" in value or "工厂订单" in value:
+        return 71
+    if "advance economic indicators" in value or "库存先行指标" in value:
+        return 73
+    if "international trade" in value or "trade in goods and services" in value or "贸易帐" in value:
         return 70
     if _is_market_relevant_raw_event(title):
         return 65
@@ -271,11 +283,34 @@ def _event_title_key(title: str) -> str:
         ("consumer sentiment", "michigan"),
         ("manufacturing pmi", "ismmanufacturing"),
         ("services pmi", "ismservices"),
+        ("个人收入与支出", "pce"),
+        ("gdp二次估值", "gdp"),
+        ("季度财报", "nvidiaearnings"),
+        ("耐用品订单", "durablegoods"),
+        ("新屋销售", "newhomesales"),
+        ("原油库存周报", "eiaoil"),
+        ("建筑支出", "construction"),
+        ("工厂订单", "factoryorders"),
+        ("商品贸易与库存先行指标", "advanceindicators"),
+        ("贸易帐", "trade"),
     )
     for needle, key in aliases:
         if needle in value:
             return key
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value)
+
+
+_GENERIC_CALENDAR_TITLES = (
+    "数据发布", "报告发布", "经济数据", "劳工统计局数据",
+    "bea数据", "官方数据", "经济报告",
+)
+
+
+def _is_generic_calendar_title(title: str) -> bool:
+    value = re.sub(r"\s+", "", str(title or "").lower())
+    if not value:
+        return True
+    return any(marker in value for marker in _GENERIC_CALENDAR_TITLES)
 
 
 def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, days: int = 14):
@@ -285,7 +320,13 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
     """
     end = start + timedelta(days=days)
     soup = BeautifulSoup(html_text or "", "html.parser")
-    plain = _page_text(html_text or "")
+    # Dedicated schedule parsers need short standalone date lines such as "28".
+    # _page_text() intentionally drops <3-char lines, so use a fuller text view here.
+    plain = "\n".join(
+        line.strip()
+        for line in soup.get_text("\n").splitlines()
+        if line.strip()
+    )[:50000]
     events = []
 
     def add(event_date: date | None, title: str, source: str):
@@ -314,8 +355,15 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
             month = _MONTH_NUM[match.group(1).lower()]
             event_date = _calendar_date_for_month_day(month, int(match.group(2)), start=start)
             title = row_text[match.end():].strip()
-            title = re.sub(r"^(?:News|Data|Article)\s+", "", title, flags=re.I)
+            title = re.sub(r"^(?:N\s*e\s*w\s*s|News|Data|Article)\s+", "", title, flags=re.I)
             title = re.sub(r"\s+View$", "", title, flags=re.I)
+            lowered = title.lower()
+            if "personal income and outlays" in lowered:
+                title = "美国个人收入与支出（PCE）"
+            elif "gdp (second estimate)" in lowered:
+                title = "美国GDP二次估值"
+            elif "international trade in goods and services" in lowered:
+                title = "美国贸易帐"
             if title:
                 add(event_date, title, "BEA")
 
@@ -367,13 +415,13 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
                 "Michigan Surveys of Consumers",
             )
 
-    # NVIDIA home/events page.
+    # NVIDIA events page: capture upcoming financial-results events.
     if name == "NVIDIA IR":
         lines = plain.splitlines()
         for i, line in enumerate(lines):
-            if "NVIDIA 2nd Quarter FY27 Financial Results" not in line:
+            if "financial results" not in line.lower() or "nvidia" not in line.lower():
                 continue
-            window = lines[max(0, i - 4):i + 3]
+            window = lines[max(0, i - 5):i + 6]
             date_match = None
             for candidate in window:
                 date_match = re.search(
@@ -381,13 +429,20 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
                     candidate,
                     re.I,
                 )
+                if not date_match:
+                    date_match = re.search(
+                        r"\b(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{1,2}),\s+(\d{4})\b",
+                        candidate,
+                        re.I,
+                    )
                 if date_match:
                     break
             if date_match:
-                month = _MONTH_ABBR_NUM[date_match.group(1).lower()]
+                month_name = date_match.group(1).lower()
+                month = _MONTH_ABBR_NUM.get(month_name, _MONTH_NUM.get(month_name))
                 add(
                     date(int(date_match.group(3)), month, int(date_match.group(2))),
-                    "NVIDIA FY2027 Q2财报",
+                    "NVIDIA季度财报",
                     "NVIDIA IR",
                 )
 
@@ -415,6 +470,57 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
             if nums[1]:
                 add(date(year, month, nums[1]), "ISM服务业PMI", "ISM")
 
+    # U.S. Census economic-indicator release calendar.
+    if name == "US Census Calendar":
+        for row in soup.find_all("tr"):
+            cells = [" ".join(cell.stripped_strings) for cell in row.find_all(["th", "td"])]
+            if len(cells) < 2:
+                continue
+            row_text = " | ".join(cells)
+            date_match = re.search(
+                r"\b(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{1,2}),\s+(\d{4})\b",
+                row_text,
+                re.I,
+            )
+            if not date_match:
+                continue
+            month = _MONTH_NUM[date_match.group(1).lower()]
+            event_date = date(int(date_match.group(3)), month, int(date_match.group(2)))
+            raw_title = cells[0].strip()
+
+            normalized = raw_title.lower()
+            if "new residential sales" in normalized:
+                title = "美国新屋销售"
+            elif "durable goods" in normalized or "advance report on durable goods" in normalized:
+                title = "美国耐用品订单"
+            elif "advance economic indicators" in normalized:
+                title = "美国商品贸易与库存先行指标"
+            elif "construction spending" in normalized or "construction put in place" in normalized:
+                title = "美国建筑支出"
+            elif "manufacturers' shipments" in normalized or "manufacturers’ shipments" in normalized:
+                title = "美国工厂订单"
+            elif "international trade in goods and services" in normalized:
+                title = "美国贸易帐"
+            else:
+                continue
+            add(event_date, title, "US Census")
+
+    # EIA weekly petroleum report. The official page exposes "Next Release Date".
+    if name == "EIA Weekly Petroleum":
+        match = re.search(
+            r"Next Release Date:\s*"
+            r"(" + "|".join(m.title() for m in _MONTH_NUM) + r")\s+(\d{1,2}),\s+(\d{4})",
+            plain,
+            re.I,
+        )
+        if match:
+            month = _MONTH_NUM[match.group(1).lower()]
+            add(
+                date(int(match.group(3)), month, int(match.group(2))),
+                "EIA原油库存周报",
+                "EIA",
+            )
+
     # Deduplicate source parser output.
     deduped = []
     seen = set()
@@ -427,13 +533,15 @@ def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, 
     return deduped
 
 
-def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, days: int = 14, target_count: int = 8):
+def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, days: int = 14):
     """
     Build the displayed calendar from verified dated candidates first.
 
     Rules:
-    - If at least 8 verified/high-confidence events exist, display exactly 8.
-    - If fewer than 8 exist, display fewer; never fabricate.
+    - There is NO fixed total event count.
+    - Display every verified/high-impact event in the 14-day window that clears
+      the market-relevance threshold.
+    - Empty days are allowed; low-value filler is not.
     - Raw official/IR parsed dates outrank AI-only dates.
     - AI-only events are fallback candidates and cannot overwrite a verified
       event with a conflicting date.
@@ -454,7 +562,7 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
             continue
         title = " ".join(str(item.get("title") or "").split()).strip()
         source = " ".join(str(item.get("source") or "").split()).strip() or "官方来源"
-        if not title:
+        if not title or _is_generic_calendar_title(title):
             continue
 
         score = _calendar_local_importance(title)
@@ -489,7 +597,7 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
 
         title = " ".join(str(item.get("title") or "").split()).strip()
         source = " ".join(str(item.get("source") or "").split()).strip()
-        if not title or not source:
+        if not title or not source or _is_generic_calendar_title(title):
             continue
 
         title_key = _event_title_key(title)
@@ -539,7 +647,8 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
         )
     )
 
-    # 4) Keep at most 3 per day, and exactly target_count when enough exist.
+    # 4) Keep every qualifying major event; only cap a single day to avoid
+    #    one date swallowing the calendar visually.
     selected = []
     per_day = {}
     for item in ranked:
@@ -547,8 +656,6 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
             continue
         selected.append(item)
         per_day[item["date"]] = per_day.get(item["date"], 0) + 1
-        if len(selected) >= target_count:
-            break
 
     selected.sort(key=lambda x: (x["date"], -x["_importance"], x["title"]))
     return [
@@ -595,13 +702,25 @@ def _dedicated_calendar_specs(report_date: date):
         ),
         (
             "NVIDIA IR",
-            "https://investor.nvidia.com/home/default.aspx",
+            "https://investor.nvidia.com/events-and-presentations/events-and-presentations/default.aspx",
             "calendar",
             False,
         ),
         (
             "ISM PMI Calendar",
             "https://www.ismworld.org/supply-management-news-and-reports/reports/rob-report-calendar/",
+            "calendar",
+            False,
+        ),
+        (
+            "US Census Calendar",
+            "https://www.census.gov/economic-indicators/calendar-listview.html",
+            "calendar",
+            False,
+        ),
+        (
+            "EIA Weekly Petroleum",
+            "https://www.eia.gov/petroleum/supply/weekly/index.php",
             "calendar",
             False,
         ),
@@ -911,12 +1030,92 @@ def _rss_text(source: str) -> str:
     return "\n".join(titles)[:8000]
 
 
+def _buy_dip_score(snapshot: dict) -> tuple[float, list[str]]:
+    """
+    Buy-oriented score: prefer quality pullbacks, not falling knives.
+
+    Positive:
+    - down on the day / over 5 days
+    - still above or near MA50
+    - near 20-day lower range without structural collapse
+    - moderate, not panic-sized, selloff
+
+    Negative:
+    - sharp breakdown below both MA20/MA50
+    - extreme downside extension
+    - already strongly positive / overextended (poor entry price)
+    """
+    try:
+        day_change = float(snapshot.get("day_change_pct", 0.0))
+        change_5d = float(snapshot.get("change_5d_pct", 0.0))
+        volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.25)
+        above_ma20 = bool(snapshot.get("above_ma20", False))
+        above_ma50 = bool(snapshot.get("above_ma50", False))
+        ma20_gap = float(snapshot.get("ma20_gap_pct", 0.0))
+        ma50_gap = float(snapshot.get("ma50_gap_pct", 0.0))
+        position20 = float(snapshot.get("position_20d", 0.5))
+        volume_ratio = float(snapshot.get("volume_ratio_20", 1.0))
+    except (TypeError, ValueError):
+        return 0.0, []
+
+    score = 0.0
+    tags = []
+    downside_sigma = abs(min(day_change, 0.0)) / volatility
+
+    # Main preference: controlled downside creates a better entry than chasing.
+    if day_change < 0:
+        score += min(downside_sigma, 2.0) * 12.0
+        tags.append("当日回撤")
+    elif day_change > max(2.5, 0.8 * volatility):
+        score -= min(day_change / volatility, 2.5) * 7.0
+        tags.append("当日偏强不追")
+
+    if change_5d < 0:
+        score += min(abs(change_5d) / max(volatility * 2.0, 1.0), 2.0) * 5.0
+        tags.append("近5日回撤")
+
+    # Best case: pullback while the medium trend is still intact.
+    if day_change < 0 and above_ma50 and ma50_gap >= -3.0 and ma20_gap >= -8.0:
+        score += 14.0
+        tags.append("中期结构未坏")
+
+    # Lower part of the 20-day range is attractive only if not deeply broken.
+    if position20 <= 0.25 and ma50_gap >= -6.0:
+        score += 8.0
+        tags.append("接近20日低位")
+
+    # Mildly below MA20 can be a reset; far below both averages is a falling knife.
+    if -8.0 <= ma20_gap <= -1.0 and ma50_gap >= -6.0:
+        score += 6.0
+        tags.append("回撤至均线附近")
+
+    if (
+        downside_sigma >= 2.2
+        and not above_ma20
+        and not above_ma50
+        and ma20_gap <= -8.0
+    ):
+        score -= 24.0
+        tags.append("破位风险")
+
+    if day_change < 0 and volume_ratio >= 2.0 and not above_ma50:
+        score -= 7.0
+        tags.append("放量下跌")
+
+    return round(score, 3), tags[:5]
+
+
 def _stock_screen_score(symbol: str, snapshot: dict) -> tuple[float, list[str]]:
     """
-    第一轮只看量价/趋势，不让 AI 在整个股票池里盲选。
+    第一轮量价筛选改为“买入候选优先”。
 
-    目标不是预测涨跌，而是找出“今天值得进一步搜新闻”的异常股票。
-    同时关注上涨、下跌、放量、趋势和突破/超跌，避免旧版只偏向大跌股。
+    不是简单找跌幅最大，而是优先：
+    1) 当日/近5日有回撤；
+    2) 中期结构未明显破坏；
+    3) 接近可观察支撑或20日低位；
+    4) 有事件/放量值得继续搜新闻。
+
+    大涨股仍可进入新闻池，但权重大幅降低；深度破位也会降权。
     """
     try:
         day_change = float(snapshot.get("day_change_pct", 0.0))
@@ -932,54 +1131,59 @@ def _stock_screen_score(symbol: str, snapshot: dict) -> tuple[float, list[str]]:
     score = 0.0
     reasons = []
 
-    # 1) 当日异常波动：使用绝对值，因此上涨/下跌都能入选。
+    buy_score, buy_tags = _buy_dip_score(snapshot)
+    score += buy_score * 1.15
+    reasons.extend(buy_tags[:3])
+
+    # Event-like abnormal move still matters, but downside gets more weight.
     standardized_move = abs(day_change) / volatility
-    score += min(standardized_move, 3.0) * 15.0
+    move_weight = 10.0 if day_change <= 0 else 5.0
+    score += min(standardized_move, 3.0) * move_weight
     if standardized_move >= 0.75:
         reasons.append("当日波动显著")
 
-    # 2) 放量通常意味着事件正在被市场交易。
+    # Volume is useful for confirming that a catalyst is actually being traded.
     if volume_ratio > 1.0:
-        score += min(volume_ratio - 1.0, 2.0) * 12.0
+        score += min(volume_ratio - 1.0, 2.0) * 8.0
     if volume_ratio >= 1.5:
         reasons.append("成交量放大")
 
-    # 3) 5日和20日趋势，避免只盯单日噪声。
-    score += min(abs(change_5d) / max(volatility * 2.2, 1.0), 2.5) * 7.0
-    score += min(abs(month_change) / max(volatility * 4.0, 2.0), 2.0) * 5.0
-    if abs(change_5d) >= max(4.0, volatility * 2.0):
-        reasons.append("5日趋势突出")
+    # Multi-day moves: favor recent weakness as an entry search condition.
+    if change_5d < 0:
+        score += min(abs(change_5d) / max(volatility * 2.2, 1.0), 2.5) * 6.0
+    else:
+        score += min(abs(change_5d) / max(volatility * 2.2, 1.0), 2.0) * 2.0
 
-    # 4) 靠近20日极值时给少量加分，用于发现突破/超跌。
-    if position20 >= 0.90:
-        score += 7.0
-        reasons.append("接近20日高位")
-    elif position20 <= 0.10:
-        score += 7.0
+    # Long-run move only gets a small anomaly weight.
+    score += min(abs(month_change) / max(volatility * 4.0, 2.0), 2.0) * 2.0
+
+    # Prefer lower-range entries; high-range names are not excluded, just de-emphasized.
+    if position20 <= 0.15:
+        score += 8.0
         reasons.append("接近20日低位")
+    elif position20 >= 0.90:
+        score += 1.0
 
-    # 5) 均线偏离过大说明处于强趋势或风险释放期，但权重不能过高。
-    score += min(abs(ma20_gap) / 8.0, 1.5) * 4.0
+    # Overextended upside is a poor entry even when newsworthy.
+    if day_change >= max(6.0, 1.7 * volatility) or ma20_gap >= 10.0:
+        score -= 12.0
+        reasons.append("短线偏热")
 
-    # 核心公司只给非常轻的基础权重，避免大公司垄断候选名单。
     if symbol in CORE_COMPANY_UNIVERSE:
         score += 1.5
 
-    return round(score, 3), reasons[:4]
+    return round(score, 3), list(dict.fromkeys(reasons))[:5]
+
 
 
 def _classify_stock_setup(snapshot: dict) -> tuple[str, float, list[str]]:
     """
-    给第二轮选股增加“可执行性”维度。
-
-    第一轮 screen_score 负责找异常；
-    这里负责判断异常是否值得进入最终研究池：
-    - constructive_pullback: 上升结构中的可控回撤
-    - clean_breakout: 放量突破但不过热
-    - steady_strength: 稳健强势
-    - risk_breakdown: 破位/风险释放，适合进入“回避”候选
-    - overextended: 大涨过热，只保留重大事件，不鼓励追涨
-    - neutral: 暂无清晰技术形态
+    买入导向的可执行形态：
+    - constructive_pullback: 中期结构未坏的可控回撤（最高优先）
+    - oversold_watch: 接近低位但尚未深度破位，等待止跌确认
+    - clean_breakout / steady_strength: 保留，但明显降权，避免追涨
+    - risk_breakdown: 下跌但结构已坏，属于回避，不是“便宜”
+    - overextended: 上涨过热
     """
     try:
         day_change = float(snapshot.get("day_change_pct", 0.0))
@@ -996,59 +1200,60 @@ def _classify_stock_setup(snapshot: dict) -> tuple[str, float, list[str]]:
 
     tags = []
 
-    # 过热：这类股票可以进入新闻池，但不应霸占最终8只。
     if (
-        day_change >= max(7.0, 1.8 * volatility)
-        or ma20_gap >= 12.0
-        or (position20 >= 0.97 and ma20_gap >= 8.0)
+        day_change >= max(6.0, 1.6 * volatility)
+        or ma20_gap >= 10.0
+        or (position20 >= 0.97 and ma20_gap >= 7.0)
     ):
-        tags.append("短线过热")
-        return "overextended", -12.0, tags
+        return "overextended", -18.0, ["短线过热"]
 
-    # 趋势中的回撤：更符合“等确认后参与”的可执行风格。
+    # Preferred buy setup.
     if (
-        day_change <= -0.20 * volatility
-        and day_change >= -1.60 * volatility
+        day_change <= -0.15 * volatility
+        and day_change >= -1.75 * volatility
         and above_ma50
-        and ma50_gap >= -4.0
-        and ma20_gap >= -7.0
+        and ma50_gap >= -3.5
+        and ma20_gap >= -8.0
     ):
-        tags.append("上升结构中的可控回撤")
-        return "constructive_pullback", 18.0, tags
+        return "constructive_pullback", 26.0, ["上升结构中的可控回撤"]
 
-    # 不过热的放量突破。
+    # More aggressive buy-watch: lower range, but not a confirmed structural collapse.
+    if (
+        day_change < 0
+        and position20 <= 0.25
+        and ma20_gap >= -10.0
+        and ma50_gap >= -6.0
+        and not (volume_ratio >= 2.0 and not above_ma50)
+    ):
+        return "oversold_watch", 18.0, ["低位观察", "等待止跌确认"]
+
+    if (
+        day_change <= -0.85 * volatility
+        and not above_ma20
+        and (not above_ma50 or ma20_gap <= -6.0)
+    ):
+        return "risk_breakdown", 2.0, ["风险破位"]
+
+    # Positive-momentum setups remain eligible but are deliberately lower priority.
     if (
         day_change >= 0.30 * volatility
-        and day_change <= 1.60 * volatility
+        and day_change <= 1.40 * volatility
         and volume_ratio >= 1.25
-        and above_ma20
-        and above_ma50
-        and ma20_gap <= 8.0
-    ):
-        tags.append("放量转强")
-        return "clean_breakout", 16.0, tags
-
-    # 稳健强势：不是单日暴冲，而是5日结构较好。
-    if (
-        above_ma20
-        and above_ma50
-        and 0.0 <= day_change <= max(4.0, 1.0 * volatility)
-        and change_5d >= max(2.0, 0.8 * volatility)
+        and above_ma20 and above_ma50
         and ma20_gap <= 7.0
     ):
-        tags.append("趋势稳健")
-        return "steady_strength", 10.0, tags
+        return "clean_breakout", 7.0, ["放量转强"]
 
-    # 明显破位也值得进入最终研究池，因为“回避”也是有价值的动作。
     if (
-        day_change <= -0.80 * volatility
-        and not above_ma20
-        and (not above_ma50 or ma20_gap <= -5.0)
+        above_ma20 and above_ma50
+        and 0.0 <= day_change <= max(3.5, 0.9 * volatility)
+        and change_5d >= max(2.0, 0.8 * volatility)
+        and ma20_gap <= 6.0
     ):
-        tags.append("风险破位")
-        return "risk_breakdown", 13.0, tags
+        return "steady_strength", 4.0, ["趋势稳健"]
 
     return "neutral", 0.0, tags
+
 
 
 def _sector_of(symbol: str) -> str:
@@ -1242,26 +1447,34 @@ def _choose_ai_company_candidates(compact_sources, collected):
 
         event_score = _news_event_score(news_text)
         setup_type, setup_score, setup_tags = _classify_stock_setup(snapshot)
+        buy_dip_score, buy_dip_tags = _buy_dip_score(snapshot)
 
         # IR只给很小加成，避免固定IR公司长期霸榜。
         ir_bonus = min(_news_event_score(ir_text) * 0.20, 3.0)
         source_bonus = 2.0 if news_by_symbol.get(symbol) else 0.0
 
-        # 第二轮不再简单延续“谁涨跌最大谁优先”。
-        # 让事件、可执行形态和风险形态获得更高权重，
-        # 对短线过热股票降权，避免最终8只全是当日大涨股。
+        try:
+            day_change = float(snapshot.get("day_change_pct", 0.0))
+            volatility = max(float(snapshot.get("volatility_20_pct", 0.0)), 0.25)
+        except (TypeError, ValueError):
+            day_change, volatility = 0.0, 1.0
+
+        # 买入导向：事件仍重要，但“回撤后的入场质量”成为第二大核心权重。
         total = (
-            market_score * 0.45
-            + event_score * 1.25
+            market_score * 0.34
+            + event_score * 1.20
             + setup_score
+            + buy_dip_score * 0.95
             + ir_bonus
             + source_bonus
         )
 
+        # 明显上涨股除非有强事件，否则降权；避免雷达变成追涨榜。
+        if day_change > max(2.0, 0.70 * volatility) and event_score < 10.0:
+            total -= 9.0
+
         if setup_type == "overextended":
-            # 若没有足够事件支撑，进一步降低“纯情绪暴冲股”的优先级。
-            if event_score < 8.0:
-                total -= 8.0
+            total -= 10.0 if event_score < 10.0 else 5.0
 
         ranked.append((round(total, 3), symbol))
 
@@ -1269,6 +1482,8 @@ def _choose_ai_company_candidates(compact_sources, collected):
         snapshot["setup_type"] = setup_type
         snapshot["setup_score"] = round(setup_score, 3)
         snapshot["setup_tags"] = setup_tags
+        snapshot["buy_dip_score"] = round(buy_dip_score, 3)
+        snapshot["buy_dip_tags"] = buy_dip_tags
         snapshot["candidate_score"] = round(total, 3)
 
     ranked.sort(key=lambda item: (-item[0], item[1]))
@@ -1293,65 +1508,88 @@ def _choose_ai_company_candidates(compact_sources, collected):
 
 def _select_balanced_ai_symbols(ranked, stock_snapshot, limit: int):
     """
-    AI最终候选池做“软平衡”。
-
-    目标不是强行凑类型，而是避免16只候选全部来自同一种
-    单日暴涨形态。优先保证：
-    - 过热股最多约25%
-    - 同行业不过度集中
-    - 可控回撤 / 突破 / 风险破位都有机会进入
+    AI候选池按“买入候选”平衡：
+    - 若候选充足，约70%优先来自当日下跌股；
+    - 优先 constructive_pullback / oversold_watch；
+    - risk_breakdown 最多约20%，避免把“跌得最惨”误当“最值得买”；
+    - 大涨过热股最多约15%；
+    - 仍保留行业分散。
     """
     if limit <= 0:
         return []
 
-    max_overextended = max(2, limit // 4)
+    target_decliners = min(limit, max(1, int(round(limit * 0.70))))
+    max_breakdowns = max(1, limit // 5)
+    max_overextended = max(1, limit // 7)
     max_per_sector = max(3, limit // 5)
 
+    def is_decliner(symbol):
+        try:
+            return float(stock_snapshot.get(symbol, {}).get("day_change_pct", 0.0)) < 0
+        except (TypeError, ValueError):
+            return False
+
+    # Preserve rank order within each bucket.
+    declining = [(score, sym) for score, sym in ranked if is_decliner(sym)]
+    other = [(score, sym) for score, sym in ranked if not is_decliner(sym)]
+
     selected = []
-    deferred = []
+    selected_set = set()
     sector_counts = {}
+    breakdown_count = 0
     overextended_count = 0
 
-    # 第一轮：控制行业和过热股占比。
-    for score, symbol in ranked:
+    def try_add(score, symbol, *, relax_sector=False):
+        nonlocal breakdown_count, overextended_count
+        if symbol in selected_set:
+            return False
         snapshot = stock_snapshot.get(symbol, {})
         setup_type = str(snapshot.get("setup_type", "neutral"))
         sector = _sector_of(symbol)
 
+        if setup_type == "risk_breakdown" and breakdown_count >= max_breakdowns:
+            return False
+        if setup_type == "overextended" and overextended_count >= max_overextended:
+            return False
         if (
-            setup_type == "overextended"
-            and overextended_count >= max_overextended
-        ):
-            deferred.append((score, symbol))
-            continue
-
-        if (
-            sector != "other"
+            not relax_sector
+            and sector != "other"
             and sector_counts.get(sector, 0) >= max_per_sector
         ):
-            deferred.append((score, symbol))
-            continue
+            return False
 
         selected.append((score, symbol))
+        selected_set.add(symbol)
+        if setup_type == "risk_breakdown":
+            breakdown_count += 1
         if setup_type == "overextended":
             overextended_count += 1
         if sector != "other":
             sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        return True
 
-        if len(selected) >= limit:
-            return selected
+    # Pass 1: fill the buy-the-dip quota from decliners.
+    for score, symbol in declining:
+        if len(selected) >= target_decliners:
+            break
+        try_add(score, symbol)
 
-    # 第二轮：如果数量不足，再按分数补齐，不为了形式丢掉高质量候选。
-    selected_symbols = {symbol for _, symbol in selected}
-    for score, symbol in deferred:
-        if symbol in selected_symbols:
-            continue
-        selected.append((score, symbol))
-        selected_symbols.add(symbol)
+    # Pass 2: best remaining names regardless of sign.
+    for score, symbol in ranked:
         if len(selected) >= limit:
             break
+        try_add(score, symbol)
+
+    # Pass 3: if sector/risk caps left us short, relax sector only.
+    if len(selected) < limit:
+        for score, symbol in ranked:
+            if len(selected) >= limit:
+                break
+            try_add(score, symbol, relax_sector=True)
 
     return selected
+
+
 
 
 class HttpCollector:
@@ -1401,7 +1639,7 @@ class HttpCollector:
             # Skipped for externally mocked sessions so existing finite-session tests
             # do not need extra mocked HTTP responses.
             calendar_specs = _dedicated_calendar_specs(self.settings.report_date)
-            with ThreadPoolExecutor(max_workers=6) as executor:
+            with ThreadPoolExecutor(max_workers=8) as executor:
                 records += list(executor.map(lambda spec: self._fetch(*spec), calendar_specs))
 
         market = self.market_loader(list(SIGNALS))
@@ -1798,14 +2036,14 @@ media_themes：
 events（这是“未来14日日历”的最终展示事件，必须严筛）：
 - 日历形式不变，但禁止“为了填格子而填格子”；没有高影响事件的日期可以留空。
 - 只选输入证据中明确给出未来日期、且可能显著影响美股/美债/美元/黄金/原油/主要行业的事件。
-- 固定目标8项；如果输入中存在至少8个经明确日期证据确认的高影响事件，必须输出8项；只有经核实候选不足8个时才允许少于8项。
-- 单日最多3项；按市场重要性排序并给 importance 0-100。importance < 58 不得输出；禁止为了凑8项加入与美股定价弱相关的统计发布。
+- 数量不设固定目标：未来14日内凡是有明确日期证据、且达到市场影响门槛的重大事件都应输出；不要因为数量多而人为删到8项，也不要为了数量少而凑数。
+- 单日最多3项；按市场重要性排序并给 importance 0-100。importance < 58 不得输出；低价值统计发布继续过滤。
 - 优先级：
   A级：FOMC、Fed主席/杰克逊霍尔、CPI、核心PCE、非农、GDP、重大关税/制裁/政策节点；
   B级：PPI、零售销售、ISM/JOLTS/消费者通胀预期、10Y/30Y国债拍卖、OPEC+、大型权重股/行业龙头财报；
   C级：只有在当前市场主线高度相关时才保留其他官方数据。
 - 大型公司财报只有在输入中存在明确日期证据时才能进入；公司IR Events/Press Release属于有效日期证据，禁止凭记忆补财报日期。
-- Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期、ISM官方PMI发布日历属于有效日程证据，应主动提取而不是忽略。
+- Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期、ISM官方PMI发布日历、Census经济指标日历、EIA周度石油报告日期属于有效日程证据，应主动提取而不是忽略。
 - 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入；单纯评论或已发生新闻不进入未来日历。
 - BLS的普通统计发布不是天然重要。明确排除：暑期青年劳动力、休假获取与使用、职业展望手册、县级就业工资、初步基准等低交易价值项目。
 - 同一事件多来源重复时只保留一项；优先 source：官方机构 > 公司IR > Reuters/FT/AP/CNBC等主流媒体。
@@ -1851,7 +2089,6 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
             collected.get("events", []),
             start=self.settings.report_date,
             days=14,
-            target_count=8,
         )
         parsed["events"] = curated_events
         collected["events"] = curated_events
@@ -1942,7 +2179,9 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
             # 实际内容仍然只是经过今日候选池筛选后的公司材料。
             company_prompt += "\n公司一手材料与逐股新闻：\n" + json.dumps(company_sources, ensure_ascii=False)
             company_prompt += """
-\n从上述候选中按“增量信息强度 + 价格反应 + 风险收益比 + 行业分散”排序，
+\n从上述候选中按“回撤后的买入价值 + 增量信息强度 + 风险收益比 + 行业分散”排序。
+本报告的个股雷达是“寻找潜在买点”，不是涨幅榜：在候选充足时，最终名单应以当日下跌/近5日回撤股票为主，
+优先寻找“基本面/事件逻辑未坏，但价格回撤后更有性价比”的股票；绝不能把单纯暴跌当成便宜。
 输出最多12个候选，系统随后会再压缩到最终8个。JSON格式：
 {"company_signals":[{
   "company":"中文公司名","company_en":"English company name",
@@ -1961,27 +2200,29 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
 4. stance_en严格映射：关注=WATCH，等待=WAIT，回避=AVOID。
 5. company_en优先使用输入中明确出现的官方/常用英文公司名；无法可靠确定时使用ticker，不猜名称。
 6. 按优先级排序；不要因为公司知名度高而优先，优先真正有当日增量信息且“下一步动作清晰”的股票。
-7. 必须综合 candidate_score、news_event_score、setup_type、setup_score；不能把最终名单简单变成“当日涨幅榜”。
-8. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
-9. “关注”最多4只，必须具备可验证的正向逻辑，并满足以下至少一种：
-   A. 上升趋势中的可控回撤/止跌；
-   B. 放量突破或趋势重新转强，但触发条件必须防止追高。
-10. setup_type=overextended 的股票原则上不得标“关注”，除非事件极强且触发条件明确要求回踩/整理后再参与。
-11. setup_type=risk_breakdown 且存在基本面或事件利空时，应优先考虑“回避”，不能机械抄底。
-12. “等待”用于方向尚可但价格、成交量或事件确认不足的股票；不要因为措辞保守而把所有股票都写成“等待”。
-13. 若候选中确有满足条件的机会，优先给出2-4只行业分散的“关注”；若存在明确破位/重大利空，也应给出1-2只“回避”。没有合格对象时可以不凑数量。
-14. 不能只凭网站介绍或单条媒体标题；公司官网若只有宣传性内容，不得作为主要论据。
-15. brief 65-85字，固定顺序：“核心事实/催化 → 价格或基本面含义 → 当前动作”；brief_en表达同样三层信息，保持同等密度，不逐字翻译。
-16. trigger 30-45字，只写升级/执行所需的可观察条件；trigger_en严格对应；禁止空泛“等待进一步确认”。
-17. risk 30-45字，只写最可能使当前逻辑失效的风险；risk_en严格对应；不同公司不得复制同一句风险。
-18. source必须是真实输入来源；只有媒体消息时，中文brief与英文brief_en都保留同等“据报道/尚待确认”限定。
-19. 中英文都能用短句不用长句；删除公司背景、行业科普、重复评价。
-20. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
+7. 必须综合 candidate_score、buy_dip_score、news_event_score、setup_type、setup_score；不能把最终名单变成“当日涨幅榜”或“跌幅榜”。
+8. 当候选充足时，最终8只尽量至少5只为当日下跌或近5日回撤；上涨股只有在事件/基本面增量明显更强时才保留。
+9. 同一行业尽量不超过2只；如果同一行业确有明显主线，可给到3只，但必须各有不同催化剂。
+10. “关注”最多4只，优先满足：
+   A. setup_type=constructive_pullback：中期结构未坏、价格回撤、等待止跌/重返关键均线；
+   B. setup_type=oversold_watch：接近低位但未形成深度破位，且有基本面/事件支撑；
+   C. 少数 clean_breakout 仅在事件极强时保留，但触发条件必须防止追高。
+11. setup_type=overextended 原则上不得标“关注”；大涨股应优先“等待回踩”而不是继续追。
+12. setup_type=risk_breakdown 不得因为“跌得多”就标“关注”；存在基本面/事件利空时优先“回避”。
+13. “等待”用于逻辑尚可但尚未止跌、尚未收复关键均线或量价确认不足；必须明确等什么。
+14. 若候选中有合格回撤机会，优先给出2-4只行业分散的“关注”；可保留1-2只明确破位的“回避”作为反例。没有合格对象时不凑“关注”。
+15. 不能只凭网站介绍或单条媒体标题；公司官网若只有宣传性内容，不得作为主要论据。
+16. brief 65-85字，固定顺序：“核心事实/催化 → 价格或基本面含义 → 当前动作”；brief_en表达同样三层信息，保持同等密度，不逐字翻译。
+17. trigger 30-45字，只写升级/执行所需的可观察条件；trigger_en严格对应；禁止空泛“等待进一步确认”。
+18. risk 30-45字，只写最可能使当前逻辑失效的风险；risk_en严格对应；不同公司不得复制同一句风险。
+19. source必须是真实输入来源；只有媒体消息时，中文brief与英文brief_en都保留同等“据报道/尚待确认”限定。
+20. 中英文都能用短句不用长句；删除公司背景、行业科普、重复评价。
+21. 不编造买卖价格，不承诺收益，不为凑数量牺牲证据质量。
 
-21. company / stance / brief / trigger / risk 除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
-22. company 的各语言版本可使用该市场最常见的公司名称；无法可靠本地化时保留英文公司名或ticker。
-23. 所有语言的 stance 必须与中文完全一致；只翻译表达，不重新判断。
-24. JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的任何文字。
+22. company / stance / brief / trigger / risk 除 `_en` 外，同时输出 `_zh_tw/_bg/_ru/_ja/_ko/_fr/_de/_es/_th`。
+23. company 的各语言版本可使用该市场最常见的公司名称；无法可靠本地化时保留英文公司名或ticker。
+24. 所有语言的 stance 必须与中文完全一致；只翻译表达，不重新判断。
+25. JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的任何文字。
 """
             company_system = (
                 "你是多语种美股研究负责人。候选已通过量价和新闻初筛。"
@@ -2127,25 +2368,24 @@ JSON结构必须完整闭合；禁止Markdown代码块、注释或JSON之外的�
                             and above_ma50
                             and ma20_gap >= -7.0
                         )
-                        confirmed_breakout = (
-                            day_change >= 0.30 * volatility
-                            and day_change <= 1.60 * volatility
-                            and volume_ratio >= 1.25
-                            and above_ma20
-                            and above_ma50
-                            and ma20_gap <= 8.0
+                        oversold_watch = (
+                            setup_type == "oversold_watch"
+                            and day_change < 0
+                            and ma20_gap >= -10.0
                         )
-                        steady_strength = (
-                            setup_type == "steady_strength"
+                        exceptional_breakout = (
+                            setup_type == "clean_breakout"
+                            and day_change <= 1.20 * volatility
+                            and volume_ratio >= 1.35
                             and above_ma20
                             and above_ma50
-                            and ma20_gap <= 7.0
+                            and ma20_gap <= 6.0
                         )
 
                         actionable = (
                             controlled_pullback
-                            or confirmed_breakout
-                            or steady_strength
+                            or oversold_watch
+                            or exceptional_breakout
                         )
 
                         # 明确过热的股票即使AI给“关注”，也先降级为等待，
