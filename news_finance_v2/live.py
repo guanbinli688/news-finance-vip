@@ -207,6 +207,60 @@ _MONTH_ABBR_NUM = {
 }
 
 
+_MAJOR_COMPANY_EARNINGS = {
+    "NVIDIA IR": {
+        "title": "英伟达财报",
+        "url": "https://investor.nvidia.com/events-and-presentations/events-and-presentations/default.aspx",
+    },
+    "Salesforce IR": {
+        "title": "Salesforce财报",
+        "url": "https://investor.salesforce.com/events-and-presentations/",
+    },
+    "CrowdStrike IR": {
+        "title": "CrowdStrike财报",
+        "url": "https://ir.crowdstrike.com/press-releases",
+    },
+    "Okta IR": {
+        "title": "Okta财报",
+        "url": "https://ir.okta.com/overview/default.aspx",
+    },
+    "Marvell IR": {
+        "title": "Marvell财报",
+        "url": "https://investor.marvell.com/news-events/ir-calendar",
+    },
+    "Dell IR": {
+        "title": "Dell财报",
+        "url": "https://investors.delltechnologies.com/",
+    },
+    "Broadcom IR": {
+        "title": "Broadcom财报",
+        "url": "https://investors.broadcom.com/",
+    },
+    "Snowflake IR": {
+        "title": "Snowflake财报",
+        "url": "https://investors.snowflake.com/events-and-presentations/",
+    },
+    "Palo Alto Networks IR": {
+        "title": "Palo Alto Networks财报",
+        "url": "https://investors.paloaltonetworks.com/",
+    },
+    "Zscaler IR": {
+        "title": "Zscaler财报",
+        "url": "https://ir.zscaler.com/",
+    },
+    "lululemon IR": {
+        "title": "lululemon财报",
+        "url": "https://corporate.lululemon.com/investors/news-and-events/events-and-presentations",
+    },
+}
+
+_EARNINGS_WORDS = (
+    "earnings", "financial results", "quarter results", "quarterly results",
+    "results webcast", "results conference call", "earnings conference call",
+    "财报", "业绩",
+)
+
+
 def _calendar_date_for_month_day(month: int, day: int, *, start: date) -> date | None:
     year = start.year
     # If a 14-day window crosses New Year, allow January to belong to next year.
@@ -228,8 +282,28 @@ def _calendar_local_importance(title: str) -> int:
         return 99
     if "employment situation" in value or "nonfarm" in value or "非农" in value:
         return 98
-    if "nvidia" in value and ("financial results" in value or "earnings" in value or "财报" in value):
-        return 97
+    if "nvidia" in value or "英伟达" in value:
+        return 98
+    if "salesforce" in value:
+        return 95
+    if "broadcom" in value:
+        return 95
+    if "crowdstrike" in value:
+        return 94
+    if "palo alto" in value:
+        return 94
+    if "dell" in value:
+        return 93
+    if "snowflake" in value:
+        return 92
+    if "marvell" in value:
+        return 91
+    if "zscaler" in value:
+        return 91
+    if "okta" in value:
+        return 90
+    if "lululemon" in value:
+        return 88
     if "consumer price index" in value or re.search(r"\bcpi\b", value):
         return 96
     if "gdp" in value and ("estimate" in value or "国内生产总值" in value):
@@ -311,6 +385,101 @@ def _is_generic_calendar_title(title: str) -> bool:
     if not value:
         return True
     return any(marker in value for marker in _GENERIC_CALENDAR_TITLES)
+
+
+def _parse_major_company_earnings(name: str, html_text: str, *, start: date, days: int = 14):
+    """
+    Extract scheduled earnings/results dates from a curated set of
+    market-moving company IR pages.
+
+    This is deterministic: the model does not invent the date.
+    """
+    meta = _MAJOR_COMPANY_EARNINGS.get(name)
+    if not meta:
+        return []
+
+    end = start + timedelta(days=days)
+    plain = _page_text(html_text or "")
+    lines = [line.strip() for line in plain.splitlines() if line.strip()]
+    found = []
+
+    def parse_dates(value: str):
+        dates = []
+
+        # August 26, 2026 / Aug 26, 2026
+        for match in re.finditer(
+            r"\b(" + "|".join(list(_MONTH_NUM) + list(_MONTH_ABBR_NUM)) + r")\s+"
+            r"(\d{1,2}),\s+(\d{4})\b",
+            value,
+            re.I,
+        ):
+            month_name = match.group(1).lower()
+            month = _MONTH_NUM.get(month_name) or _MONTH_ABBR_NUM.get(month_name)
+            try:
+                dates.append(date(int(match.group(3)), month, int(match.group(2))))
+            except (TypeError, ValueError):
+                pass
+
+        # 09/02/2026
+        for match in re.finditer(r"\b(\d{1,2})/(\d{1,2})/(\d{4})\b", value):
+            try:
+                dates.append(date(int(match.group(3)), int(match.group(1)), int(match.group(2))))
+            except ValueError:
+                pass
+
+        # 2026-09-02
+        for match in re.finditer(r"\b(\d{4})-(\d{2})-(\d{2})\b", value):
+            try:
+                dates.append(date(int(match.group(1)), int(match.group(2)), int(match.group(3))))
+            except ValueError:
+                pass
+
+        return dates
+
+    # Look only around lines that clearly describe earnings/results.
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if not any(word in low for word in _EARNINGS_WORDS):
+            continue
+
+        window = " ".join(lines[max(0, i - 4): min(len(lines), i + 7)])
+        candidates = [d for d in parse_dates(window) if start <= d < end]
+        for event_date in candidates:
+            found.append({
+                "date": event_date.isoformat(),
+                "title": meta["title"],
+                "source": name,
+            })
+
+    # Some IR home pages put the date on one line and the event title on the next.
+    # A second pass handles that structure.
+    if not found:
+        for i in range(len(lines)):
+            window = " ".join(lines[i: min(len(lines), i + 5)])
+            low = window.lower()
+            if not any(word in low for word in _EARNINGS_WORDS):
+                continue
+            candidates = [d for d in parse_dates(window) if start <= d < end]
+            for event_date in candidates:
+                found.append({
+                    "date": event_date.isoformat(),
+                    "title": meta["title"],
+                    "source": name,
+                })
+
+    # Dedupe. For one company, one earnings date in the 14-day window is enough.
+    deduped = []
+    seen = set()
+    for item in sorted(found, key=lambda x: x["date"]):
+        key = (item["date"], item["title"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    # If a page contains several historical/other-event dates inside the window,
+    # keep the earliest qualifying future earnings event for this company.
+    return deduped[:1]
 
 
 def _parse_dedicated_calendar_events(name: str, html_text: str, *, start: date, days: int = 14):
@@ -647,12 +816,12 @@ def _normalize_market_calendar_events(ai_events, raw_events, *, start: date, day
         )
     )
 
-    # 4) Keep every qualifying major event; only cap a single day to avoid
-    #    one date swallowing the calendar visually.
+    # 4) Keep every qualifying major event. Earnings-heavy days can legitimately
+    #    contain several macro + company catalysts, so allow up to 6 per day.
     selected = []
     per_day = {}
     for item in ranked:
-        if per_day.get(item["date"], 0) >= 3:
+        if per_day.get(item["date"], 0) >= 6:
             continue
         selected.append(item)
         per_day[item["date"]] = per_day.get(item["date"], 0) + 1
@@ -725,6 +894,11 @@ def _dedicated_calendar_specs(report_date: date):
             False,
         ),
     ]
+    for company_name, meta in _MAJOR_COMPANY_EARNINGS.items():
+        # NVIDIA may already be present in the macro calendar specs; avoid duplicates.
+        if not any(spec[0] == company_name for spec in specs):
+            specs.append((company_name, meta["url"], "company_calendar", False))
+
     return specs
 
 
@@ -1720,6 +1894,13 @@ class HttpCollector:
                         start=self.settings.report_date,
                         days=14,
                     )
+                elif kind == "company_calendar":
+                    parsed_events = _parse_major_company_earnings(
+                        name,
+                        response.text,
+                        start=self.settings.report_date,
+                        days=14,
+                    )
 
             return {"name": name, "url": url, "final_url": str(response.url), "kind": kind,
                     "core": core, "status": status, "text": text,
@@ -1877,6 +2058,8 @@ class OpenAIAnalyzer:
                 limit = 1000
             elif kind == "calendar":
                 limit = 5000
+            elif kind == "company_calendar":
+                limit = 700
             elif kind == "official":
                 limit = 1800
             else:
@@ -2037,12 +2220,13 @@ events（这是“未来14日日历”的最终展示事件，必须严筛）：
 - 日历形式不变，但禁止“为了填格子而填格子”；没有高影响事件的日期可以留空。
 - 只选输入证据中明确给出未来日期、且可能显著影响美股/美债/美元/黄金/原油/主要行业的事件。
 - 数量不设固定目标：未来14日内凡是有明确日期证据、且达到市场影响门槛的重大事件都应输出；不要因为数量多而人为删到8项，也不要为了数量少而凑数。
-- 单日最多3项；按市场重要性排序并给 importance 0-100。importance < 58 不得输出；低价值统计发布继续过滤。
+- 单日最多6项；宏观、Fed与大型公司财报可以同日并列。按市场重要性排序并给 importance 0-100。importance < 58 不得输出；低价值统计发布继续过滤。
 - 优先级：
   A级：FOMC、Fed主席/杰克逊霍尔、CPI、核心PCE、非农、GDP、重大关税/制裁/政策节点；
   B级：PPI、零售销售、ISM/JOLTS/消费者通胀预期、10Y/30Y国债拍卖、OPEC+、大型权重股/行业龙头财报；
   C级：只有在当前市场主线高度相关时才保留其他官方数据。
 - 大型公司财报只有在输入中存在明确日期证据时才能进入；公司IR Events/Press Release属于有效日期证据，禁止凭记忆补财报日期。
+- 如果“原始未来14日结构化日程候选”中已经存在大型/行业龙头公司财报，不得因为同日有宏观数据就忽略；宏观事件与公司财报应同时保留。
 - Fed月度Calendar、BEA Release Schedule、Michigan官方下一发布日期、ISM官方PMI发布日历、Census经济指标日历、EIA周度石油报告日期属于有效日程证据，应主动提取而不是忽略。
 - 政策/地缘事件只有在输入中存在明确日程、截止日期或已宣布发布会时才能进入；单纯评论或已发生新闻不进入未来日历。
 - BLS的普通统计发布不是天然重要。明确排除：暑期青年劳动力、休假获取与使用、职业展望手册、县级就业工资、初步基准等低交易价值项目。
